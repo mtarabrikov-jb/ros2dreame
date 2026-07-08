@@ -193,6 +193,9 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
         if tick % 50 == 10 {
             // SetCleaning `[side, main, fan, pump, mode, 0]`. Idle keeps ava's
             // exact frame; any commanded actuator switches to vacuum mode (0x03).
+            // (The MCU "active mode" byte does NOT gate the ToF - that was a red
+            // herring; the ToF just needs ava fully dead. See docs/MCU + the
+            // dreame-vacuum-livestream phase3 notes.)
             let (sb, mb, fan, pump) = (
                 sh.side_brush.load(Ordering::Relaxed),
                 sh.main_brush.load(Ordering::Relaxed),

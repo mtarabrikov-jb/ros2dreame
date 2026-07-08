@@ -45,7 +45,10 @@ make down      # stop
 
 - The robot must be running ros2dreame (`deploy/direct-mode.sh start` for nav, or
   `observe` for the RGB camera). `ROS_DOMAIN_ID` must match (0 by default).
-- The container uses Fast-DDS forced to UDP (`fastdds_no_shm.xml`) so it reaches
-  the robot's RustDDS over the network reliably.
-- Camera topics are **reliable** QoS (large JPEGs fragment); set rqt/rviz image
-  displays to Reliable or they show nothing.
+- The container uses the default Fast-DDS transports (SHM for local large-image
+  republish + UDP to reach the robot's RustDDS). To force UDP-only, set
+  `FASTRTPS_DEFAULT_PROFILES_FILE=/cfg/fastdds_no_shm.xml` in `docker-compose.yml`.
+- Cameras go **only** over ROS topics now (no HTTP/MJPEG): `w10-camd` -> tmpfs shm
+  -> `ros2dreame` -> `/camera/image_raw/compressed` (RGB, observe) or
+  `/camera_ir/image_raw/compressed` (IR, nav). They are **reliable** QoS (large
+  JPEGs fragment); set rqt/rviz image displays to Reliable or they show nothing.

@@ -38,13 +38,24 @@ case "${1:-status}" in
         killall ros2dreame w10-camd avatap-relay ava_cam_relay w10-cam go2rtc 2>/dev/null
         freeze
         killall ava 2>/dev/null
+        # ava MUST be fully dead before we open a camera: while it lives it holds
+        # video1/video2 and runs the RGB pipeline on isp0, which corrupts our
+        # capture (kernel logs "video1 open busy" + "isp0 frame error" and the
+        # frame is pure noise). This was THE cause of the long "ToF only streams
+        # noise" red herring. Wait for it to exit, then force-kill as a backstop.
+        for i in 1 2 3 4 5; do pidof ava >/dev/null 2>&1 || break; sleep 1; done
+        killall -9 ava 2>/dev/null
         sleep 1
         mkdir -p /data/log
         IR=""
         if [ -x "$CAMD" ]; then
-            echo ">> start camera helper w10-camd (MJPEG :8090 RGB / :8091 IR)"
-            setsid "$CAMD" both >/data/log/camd.log 2>&1 </dev/null &
-            IR="W10_CAM_IR=1"
+            # ONE camera per mode (RGB=isp0, ToF=isp1 - separate ISPs). Both give a
+            # clean image with ava dead: observe -> RGB (/camera), nav -> ToF
+            # (/camera_ir, structured-light IR). RGB additionally needs the OV8856
+            # primed (by ava or a reboot) before the first parked capture.
+            if [ "$1" = observe ]; then CAMMODE=rgb; else CAMMODE=tof; IR="W10_CAM_IR=1"; fi
+            echo ">> start camera helper w10-camd ($CAMMODE)"
+            setsid "$CAMD" "$CAMMODE" >/data/log/camd.log 2>&1 </dev/null &
             sleep 2
         else
             echo "   (no w10-camd at $CAMD; cameras skipped)"

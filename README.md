@@ -49,11 +49,27 @@ publisher, so the ROS 2 side is identical:
 
 ## Cameras
 
-The vendored helper `w10-camd` (`cam-helper/`) drives the cameras via the vendor
-`libsunxicamera.so` (RGB OV8856 /dev/video2 NV21; IR/ToF ofilm0092 /dev/video1,
-whose media-controller pipeline it sets up), JPEG-encodes each frame, and serves
-MJPEG on loopback (:8090 RGB, :8091 IR). `ros2dreame` reads that and republishes
-as `sensor_msgs/CompressedImage`. No `go2rtc`, no `ava_cam_relay`, no shm.
+The vendored helper `w10-camd` (`cam-helper/`) captures a frame, JPEG-encodes it,
+and writes it into a tmpfs shared-memory ring (seqlock; `cam-helper/ros2cam_shm.h`)
+- `/tmp/ros2cam.shm` (RGB) or `/tmp/ros2cam_ir.shm` (IR/ToF). `ros2dreame` reads the
+ring and publishes each frame as `sensor_msgs/CompressedImage`. No HTTP/MJPEG
+server, no `go2rtc`, no `ava_cam_relay` - frames go straight into ROS topics.
+
+- **RGB** (OV8856, /dev/video2, isp0): driven via the vendor `libsunxicamera.so`
+  (NV21 672x504). Needs the sensor primed (by `ava` or a reboot) and the robot
+  parked - runs in `observe` mode -> `/camera`.
+- **IR/ToF** (ofilm0092 Sunny iToF, /dev/video1, isp1): driven with **raw V4L2**
+  (MPLANE BG12 224x1558) + the ToF media pipeline + the sensor's i2c enable
+  registers on `/dev/i2c-2` @0x3d (`libsunxicamera` is RGB-only and can't bring the
+  ToF up). Runs in nav mode -> `/camera_ir` (structured-light IR; `ir_process.h`
+  decodes the 9 sub-frames to grayscale).
+
+**CRITICAL:** `ava` must be fully dead before a camera opens - while it lives it
+holds the video nodes and floods isp0 with frame errors, and the capture comes out
+as pure noise (this was a long red herring). `direct-mode.sh` freezes both
+watchdogs, kills `ava`, and waits for it to exit first, then runs ONE camera per
+mode (`observe`->RGB, nav->ToF). Full hardware/kernel RE:
+`../dreame-vacuum-livestream/phase3-noava/README.md`.
 
 Why a separate helper (not folded into ros2dreame): driving the camera needs the
 vendor `.so`, which must be `dlopen`'d - and a fully static musl binary has no
@@ -98,8 +114,8 @@ make rviz    # /scan /odom /tf + pose
   decode (`Status20ms/10ms/100ms`, `Triggers`, `Battery`) + encode (`MotorCtrl`,
   `SetCleaning`, `SetLED`). From `VacuumTiger/dreame-w10/proto`; the direct driver
   (`src/direct.rs`) is ported from `VacuumTiger/dreame-w10/mcud`.
-- `cam-helper/` - `w10-camd.c` (camera driver + JPEG + MJPEG server, merged from
-  `w10-cam` + `ava_cam_relay`) plus `ir_process.h`/`jpeg_gray.h`. `make docker`
+- `cam-helper/` - `w10-camd.c` (camera driver + JPEG + shm publisher, merged from
+  `w10-cam` + `ava_cam_relay`) plus `ros2cam_shm.h`/`ir_process.h`/`jpeg_gray.h`. `make docker`
   cross-builds it for the robot (dynamic aarch64).
 
 ## Build

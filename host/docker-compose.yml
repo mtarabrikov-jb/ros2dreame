@@ -21,7 +21,10 @@ services:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - ROS_DISTRO=jazzy
       - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-      - FASTRTPS_DEFAULT_PROFILES_FILE=/cfg/fastdds_no_shm.xml
+      # Default transports (SHM + UDP): SHM carries the large local raw-image
+      # topics (republish -> rqt) without fragmenting; the robot is remote so it
+      # uses UDP anyway. Forcing UDP-only broke the local image path. To force
+      # UDP instead, set FASTRTPS_DEFAULT_PROFILES_FILE=/cfg/fastdds_no_shm.xml.
       - DISPLAY=${DISPLAY:-:0}
       - QT_X11_NO_MITSHM=1
       - LIBGL_ALWAYS_SOFTWARE=${LIBGL_ALWAYS_SOFTWARE:-1}

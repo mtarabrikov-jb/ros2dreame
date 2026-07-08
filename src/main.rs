@@ -122,17 +122,19 @@ fn main() {
         Some(direct::run(&mcu, &lds, observe, tx.clone()))
     };
 
-    // Cameras: read MJPEG from the vendored w10-camd helper over loopback (no
-    // go2rtc), publish as CompressedImage. "camera" (:8090) always; "camera_ir"
-    // (:8091) when the helper also runs ToF (W10_CAM_IR). frame_id routes topic.
-    let cam_host = std::env::var("W10_CAM_ADDR").unwrap_or_else(|_| "127.0.0.1".into());
-    let mut cams: Vec<(&str, u16)> = vec![("camera", 8090)];
+    // Cameras: read JPEG frames from the vendored w10-camd helper over a tmpfs
+    // shm ring (no HTTP), publish as CompressedImage. "camera" (RGB shm) always;
+    // "camera_ir" (ToF shm) when the helper also runs ToF (W10_CAM_IR). frame_id
+    // routes the topic.
+    let rgb_shm = std::env::var("W10_CAM_SHM").unwrap_or_else(|_| "/tmp/ros2cam.shm".into());
+    let ir_shm = std::env::var("W10_CAM_SHM_IR").unwrap_or_else(|_| "/tmp/ros2cam_ir.shm".into());
+    let mut cams: Vec<(&str, String)> = vec![("camera", rgb_shm)];
     if std::env::var("W10_CAM_IR").is_ok() {
-        cams.push(("camera_ir", 8091));
+        cams.push(("camera_ir", ir_shm));
     }
-    for (frame, port) in &cams {
-        let (a, f, txc) = (format!("{cam_host}:{port}"), frame.to_string(), tx.clone());
-        thread::spawn(move || cam::cam_reader(a, f, txc));
+    for (frame, path) in &cams {
+        let (p, f, txc) = (path.clone(), frame.to_string(), tx.clone());
+        thread::spawn(move || cam::cam_reader(p, f, txc));
     }
     drop(tx);
 
@@ -220,7 +222,7 @@ fn main() {
 
     // Camera publishers: /<frame>/image_raw/compressed (image_transport compressed).
     let mut img_pubs: Vec<(String, ros2_client::Publisher<msg::CompressedImage>)> = Vec::new();
-    for (frame, _port) in &cams {
+    for (frame, _path) in &cams {
         let topic = node
             .create_topic(
                 &Name::new(&format!("/{frame}/image_raw"), "compressed").unwrap(),
