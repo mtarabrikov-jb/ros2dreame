@@ -10,6 +10,7 @@
 //! With TF, rviz (Fixed Frame = odom) renders /scan and the odometry pose.
 
 mod cam;
+mod ctrl;
 mod msg;
 mod tap;
 
@@ -105,6 +106,12 @@ fn main() {
         thread::spawn(move || cam::cam_reader(a, s, f, txc));
     }
     drop(tx);
+
+    // Direct mode (ava off): enable the LDS turret via w10-mcud's control port
+    // and hold it for future /cmd_vel. Absent in tap mode (ava owns the LDS).
+    if let Ok(ctrl_addr) = std::env::var("W10_CTRL_ADDR") {
+        thread::spawn(move || ctrl::ctrl_client(ctrl_addr));
+    }
 
     let context = Context::new().expect("create ROS 2 context");
     let mut node = context

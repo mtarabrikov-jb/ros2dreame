@@ -21,20 +21,12 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 MCUD="${MCUD:-$DIR/w10-mcud}"
 R2D="${R2D:-$DIR/ros2dreame}"
 CAMSH="${CAMSH:-/data/camstream/noava-cam.sh}"
-CTRL=7705
+CTRL_ADDR="${CTRL_ADDR:-127.0.0.1:7705}"
 
 sysmon() { ps 2>/dev/null | grep '[s]ys_monitor.sh ava' | awk '{print $1}'; }
 mon()    { ps 2>/dev/null | grep '[r]c.d/monitor.sh'     | awk '{print $1}'; }
 freeze() { for p in $(sysmon) $(mon); do kill -STOP "$p" 2>/dev/null; done; }
 resume() { for p in $(sysmon) $(mon); do kill -CONT "$p" 2>/dev/null; done; }
-# Send one control line to w10-mcud (text protocol on 7705).
-ctrl() {
-    if command -v nc >/dev/null 2>&1; then
-        printf '%s\n' "$1" | nc -w1 127.0.0.1 "$CTRL" >/dev/null 2>&1
-    else
-        printf '%s\n' "$1" > "/dev/tcp/127.0.0.1/$CTRL" 2>/dev/null
-    fi
-}
 
 case "${1:-status}" in
     start)
@@ -51,14 +43,12 @@ case "${1:-status}" in
         setsid "$MCUD" >/data/log/mcud.log 2>&1 </dev/null &
         sleep 2
         pidof w10-mcud >/dev/null || { echo "ERROR: w10-mcud not up"; tail -5 /data/log/mcud.log; exit 1; }
-        echo ">> enable LDS turret (lidar 1 -> :$CTRL)"
-        ctrl "lidar 1"
         echo ">> start cameras ($CAM)"
         [ -x "$CAMSH" ] && sh "$CAMSH" start "$CAM" 2>&1 | tail -2 || echo "   (no camera stack at $CAMSH; skipping)"
-        echo ">> start ros2dreame"
+        echo ">> start ros2dreame (enables LDS turret via control $CTRL_ADDR)"
         IR=""
         { [ "$CAM" = both ] || [ "$CAM" = tof ]; } && IR="W10_CAM_IR=1"
-        setsid env RUST_LOG=info $IR "$R2D" >/data/log/ros2dreame.log 2>&1 </dev/null &
+        setsid env RUST_LOG=info W10_CTRL_ADDR="$CTRL_ADDR" $IR "$R2D" >/data/log/ros2dreame.log 2>&1 </dev/null &
         sleep 2
         if pidof ros2dreame >/dev/null; then
             echo ">> UP (ava OFF). /scan /odom /tf + /camera(_ir). Restore: direct-mode.sh restore"
