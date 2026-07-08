@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-jazzy-rqt-image-view \
         ros-jazzy-rqt-tf-tree \
         ros-jazzy-teleop-twist-keyboard \
+        ros-jazzy-image-transport-plugins \
     && rm -rf /var/lib/apt/lists/*
 
 # Source ROS in every shell (docker exec bypasses the entrypoint).

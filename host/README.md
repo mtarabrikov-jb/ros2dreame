@@ -18,8 +18,9 @@ make down      # stop
 - **`make rqt`** opens rqt. Add plugins from its menu (`Plugins >`):
   - **Topic Monitor** - every topic, live values (`/odom` `/imu` `/battery`
     `/dock` `/bumper` `/cliff` `/motor_currents` ...).
-  - **Image View** - `/camera/image_raw` (RGB, observe mode) or
-    `/camera_ir/image_raw` (IR, nav mode). Set Reliability = Reliable for images.
+  - **Image View** - pick the **base** topic `/camera_ir/image_raw` (IR, nav
+    mode) or `/camera/image_raw` (RGB, observe mode); the `compressed` transport
+    (bundled via `image-transport-plugins`) decodes it. Set Reliability = Reliable.
   - **Plot** - graph `/imu`, `/battery/percentage`, `/motor_currents/data[2]`
     (the main-brush current), etc.
   - **Message Publisher** - publish `/set_fan` `/set_main_brush` `/set_side_brush`
