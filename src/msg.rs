@@ -111,6 +111,29 @@ pub struct Odometry {
     pub twist: TwistWithCovariance,
 }
 
+// --- tf2 ---
+
+/// geometry_msgs/Transform
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct Transform {
+    pub translation: Vector3,
+    pub rotation: Quaternion,
+}
+
+/// geometry_msgs/TransformStamped
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct TransformStamped {
+    pub header: Header,
+    pub child_frame_id: String,
+    pub transform: Transform,
+}
+
+/// tf2_msgs/TFMessage
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct TFMessage {
+    pub transforms: Vec<TransformStamped>,
+}
+
 /// Wall-clock ROS time (`builtin_interfaces/Time`) from the system clock.
 pub fn now() -> Time {
     let d = std::time::SystemTime::now()
