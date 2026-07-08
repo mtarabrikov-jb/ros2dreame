@@ -10,7 +10,7 @@
 //! With TF, rviz (Fixed Frame = odom) renders /scan and the odometry pose.
 
 mod cam;
-mod ctrl;
+mod direct;
 mod msg;
 mod tap;
 
@@ -80,18 +80,30 @@ fn odom_tf(o: &Odometry) -> TFMessage {
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let mcu_addr = std::env::var("W10_MCU_ADDR").unwrap_or_else(|_| "127.0.0.1:7701".into());
-    let lds_addr = std::env::var("W10_LDS_ADDR").unwrap_or_else(|_| "127.0.0.1:7702".into());
-
     let (tx, rx) = std::sync::mpsc::channel::<Tap>();
-    {
-        let tx = tx.clone();
-        thread::spawn(move || tap::mcu_reader(mcu_addr, tx));
-    }
-    {
-        let tx = tx.clone();
-        thread::spawn(move || tap::lds_reader(lds_addr, tx));
-    }
+
+    // Data source. Default: DIRECT (ava OFF) - open /dev/ttyS4 + /dev/ttyS3 and
+    // drive the MCU/LDS in-process (one binary, no external daemon). Set
+    // W10_MCU_ADDR (host:port) to use TAP mode instead (ava ON, read
+    // avatap-relay's mirror over TCP) for development.
+    let _drive = if let Ok(mcu_addr) = std::env::var("W10_MCU_ADDR") {
+        let lds_addr = std::env::var("W10_LDS_ADDR").unwrap_or_else(|_| "127.0.0.1:7702".into());
+        log::info!("data source: TAP (mcu {mcu_addr}, lds {lds_addr})");
+        {
+            let tx = tx.clone();
+            thread::spawn(move || tap::mcu_reader(mcu_addr, tx));
+        }
+        {
+            let tx = tx.clone();
+            thread::spawn(move || tap::lds_reader(lds_addr, tx));
+        }
+        None
+    } else {
+        let mcu = std::env::var("W10_MCU").unwrap_or_else(|_| "/dev/ttyS4".into());
+        let lds = std::env::var("W10_LDS").unwrap_or_else(|_| "/dev/ttyS3".into());
+        log::info!("data source: DIRECT (ava off; mcu {mcu}, lds {lds})");
+        Some(direct::run(&mcu, &lds, tx.clone()))
+    };
 
     // Cameras: read MJPEG from go2rtc (fed by the vendor ava stack OR the no-ava
     // w10-cam stack). "camera" always; "camera_ir" when W10_CAM_IR is set (the
@@ -106,12 +118,6 @@ fn main() {
         thread::spawn(move || cam::cam_reader(a, s, f, txc));
     }
     drop(tx);
-
-    // Direct mode (ava off): enable the LDS turret via w10-mcud's control port
-    // and hold it for future /cmd_vel. Absent in tap mode (ava owns the LDS).
-    if let Ok(ctrl_addr) = std::env::var("W10_CTRL_ADDR") {
-        thread::spawn(move || ctrl::ctrl_client(ctrl_addr));
-    }
 
     let context = Context::new().expect("create ROS 2 context");
     let mut node = context

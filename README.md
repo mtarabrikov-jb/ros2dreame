@@ -13,68 +13,61 @@ irrelevant because the binary is fully static musl.
 
 ## Status
 
-Milestone 0 (current): node + heartbeat, to prove the `ros2-client` + RustDDS +
-static-musl-aarch64 toolchain end to end. Next milestones add the real topics.
-
-## Planned ROS 2 interface
-
-Published:
+Working, ava OFF, one binary (verified on the robot -> a Jazzy container):
 - `/scan` `sensor_msgs/LaserScan` - LDS arc (W10 is a ~126 deg rear arc, not 360)
-- `/odom` `nav_msgs/Odometry` + `/tf` `odom -> base_link`
-- `/imu` `sensor_msgs/Imu`
-- `/battery` `sensor_msgs/BatteryState`
-- `/bumper`, `/cliff`, `/dock` - contact / cliff / dock-connected + raw dock-IR
-- motor currents (drive L/R, brushes, load) - diagnostics
+- `/odom` `nav_msgs/Odometry` + `/tf` (`odom -> base_link`) + `/tf_static`
+  (`base_link -> laser`)
 - `/camera/image_raw/compressed`, `/camera_ir/image_raw/compressed`
-  `sensor_msgs/CompressedImage` (+ `CameraInfo`)
+  `sensor_msgs/CompressedImage`
 
-Subscribed (direct mode):
-- `/cmd_vel` `geometry_msgs/Twist` -> `MotorCtrl`
-- services: suction / brushes / water pump / LED / LDS motor
+Planned next:
+- `/imu`, `/battery`, `/bumper`, `/cliff`, `/dock` (+ raw dock-IR), motor currents
+- `/cmd_vel` `geometry_msgs/Twist` -> `MotorCtrl` (the direct driver already has
+  the gated drive path; `Shared::set_drive` just needs a subscriber) + actuator
+  services (suction / brushes / water pump / LED)
 
-## Data source: TCP relay (same wire in both modes)
+## Data sources
 
-`ros2dreame` reads the raw framed MCU + LDS streams over TCP - `mcu-rx` (7701),
-`lds-rx` (7702) - and decodes them with `dreame-proto`. What feeds those ports
-decides whether `ava` is on or off:
+Two, selected at runtime. Both decode with `dreame-proto` and feed the same
+publisher, so the ROS 2 side is identical:
 
-- **ava OFF (full autonomy, the goal):** the vendored **`w10-mcud`** opens
-  `/dev/ttyS4` + `/dev/ttyS3` itself, sustains the MCU (MotorCtrl 50Hz +
-  heartbeats + ping/pong, own watchdog/clamp/cliff-gate), and serves 7701/7702
-  (+ control 7705). No vendor daemon, no SangamIO.
-- **ava ON (development tap):** `avatap-relay` mirrors `ava`'s serial I/O
-  read-only onto the same 7701/7702. Lets you develop against live telemetry
-  while `ava` keeps the robot safe.
+- **DIRECT (default; ava OFF):** `src/direct.rs` opens `/dev/ttyS4` + `/dev/ttyS3`
+  itself and drives the MCU in-process - MotorCtrl 50 Hz + `0x0f` pong +
+  the periodic SetLED/SetCleaning/`0x14`/`0x26`/`0x1d` frames, with a command
+  watchdog, speed clamp and a live cliff/bumper hazard gate - and spins the LDS
+  turret. Status -> `/odom`, LDS -> `/scan`. No external daemon, no vendor `ava`,
+  no SangamIO. (Ported from `w10-mcud`; drive is present but disabled until
+  `/cmd_vel` is wired - the robot does not move yet.)
+- **TAP (dev; ava ON):** set `W10_MCU_ADDR=host:7701` to read `avatap-relay`'s
+  read-only serial mirror over TCP instead. Lets you develop against live
+  telemetry while `ava` keeps the robot safe.
 
-Either way `ros2dreame` is unchanged. Cameras come from go2rtc MJPEG
-(`/api/stream.mjpeg?src=camera[_ir]`), fed by the no-ava `w10-cam` stack (ava
-off) or `ava`'s own relay (ava on) - wrapped as `CompressedImage`, no decode.
+Cameras come from go2rtc MJPEG (`/api/stream.mjpeg?src=camera[_ir]`), fed by the
+no-ava `w10-cam` stack (ava off) or `ava`'s relay (ava on) - wrapped as
+`CompressedImage`, no decode.
 
-## Full autonomy, ava OFF
+## Full autonomy, ava OFF (one binary, one script)
 
-Everything below builds from THIS repo. `deploy/direct-mode.sh` (run on the
-robot) freezes both ava watchdogs, kills ava, starts `w10-mcud` + the camera
-stack + `ros2dreame`, and enables the LDS turret:
+`deploy/direct-mode.sh` (run on the robot) freezes both ava watchdogs, kills ava
+(freeing `ttyS4`/`ttyS3`), brings up the camera stack, and starts `ros2dreame` -
+which then drives the MCU/LDS itself:
 
 ```sh
-deploy/direct-mode.sh start [rgb|tof|both]   # ava off, full stack up
+deploy/direct-mode.sh start [rgb|tof|both]   # ava off (default both)
 deploy/direct-mode.sh restore                # ava back
 ```
 
 (The camera stack `w10-cam`/`noava-cam.sh` lives in the separate
 `dreame-vacuum-livestream` project and needs the vendor `libsunxicamera.so`; it
-is a runtime dependency, not vendored here.)
+is a runtime dependency, not part of this repo.)
 
-## Vendored (self-contained)
+## Vendored
 
-- `dreame-proto/` - the Dreame MCU/LDS protocol (pure `no_std`, no deps): framing,
-  decode (`Status20ms/10ms/100ms`, `Triggers`, `Battery`) + encode (`MotorCtrl`,
-  `SetCleaning`, `SetLED`). Copied from `VacuumTiger/dreame-w10/proto`.
-- `w10-mcud/` - the standalone MCU driver (deps: `libc` + `dreame-proto`). Copied
-  from `VacuumTiger/dreame-w10/mcud` (branch `dreame_w10_control`).
-
-Both are plain copies so this repo builds the whole ava-off stack on its own. To
-resync, re-copy the sources from upstream.
+`dreame-proto/` - the Dreame MCU/LDS protocol (pure `no_std`, no deps): framing,
+decode (`Status20ms/10ms/100ms`, `Triggers`, `Battery`) + encode (`MotorCtrl`,
+`SetCleaning`, `SetLED`). Copied from `VacuumTiger/dreame-w10/proto`; the direct
+driver (`src/direct.rs`) is ported from `VacuumTiger/dreame-w10/mcud`. Re-copy
+`dreame-proto/src/*` to resync the protocol.
 
 ## Build
 
@@ -86,10 +79,10 @@ rustup target add aarch64-unknown-linux-musl   # one-time
 ./build/build-aarch64.sh
 ```
 
-Builds the whole workspace - `ros2dreame` AND `w10-mcud` - as fully static
-`ELF aarch64` (`ldd` -> "not a dynamic executable") under
-`target/aarch64-unknown-linux-musl/release/`. Deploy both with `cat over ssh`
-(the robot has no sftp-server), e.g. `cat ros2dreame | ssh root@<ip> 'cat > /data/ros2dreame/ros2dreame && chmod +x $_'` (and likewise `w10-mcud` + `deploy/direct-mode.sh`).
+Produces one fully static `ELF aarch64` (`ldd` -> "not a dynamic executable"):
+`target/aarch64-unknown-linux-musl/release/ros2dreame`. Deploy it plus
+`deploy/direct-mode.sh` with `cat over ssh` (the robot has no sftp-server), e.g.
+`cat ros2dreame | ssh root@<ip> 'cat > /data/ros2dreame/ros2dreame && chmod +x $_'`.
 
 Native (fast API checks on the dev host): `cargo build`.
 

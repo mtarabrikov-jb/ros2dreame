@@ -1,27 +1,22 @@
 #!/bin/sh
 # ===========================================================================
-# Full autonomy, ava OFF. Brings up the whole "no vendor daemon" stack, all
-# built from THIS repo (w10-mcud is vendored here):
-#
-#   w10-mcud    drives /dev/ttyS4 (MotorCtrl 50Hz + heartbeats + ping/pong,
-#               own watchdog/clamp/cliff-gate), forwards ttyS3 LDS, serves
-#               telemetry on 7701 (mcu-rx) / 7702 (lds-rx) + control on 7705.
-#   noava-cam   the standalone w10-cam -> relay -> go2rtc camera stack.
-#   ros2dreame  reads 7701/7702 + go2rtc MJPEG -> ROS 2 topics.
+# Full autonomy, ava OFF - ONE binary. Kills the vendor daemon and runs
+# ros2dreame, which opens /dev/ttyS4 (MCU) + /dev/ttyS3 (LDS) itself, drives the
+# MCU (MotorCtrl 50Hz + heartbeats + ping/pong, watchdog/clamp/cliff-gate), spins
+# the LDS turret, and republishes everything as ROS 2. The camera stack
+# (noava-cam: w10-cam -> relay -> go2rtc) is brought up alongside if present.
 #
 # Freezes BOTH ava watchdogs (sys_monitor.sh ava + rc.d/monitor.sh) so ava does
-# not respawn mid-session, and enables the LDS turret (silent until told).
+# not respawn mid-session.
 #
-#   direct-mode.sh start [rgb|tof|both]   ava off, full stack up (default both)
-#   direct-mode.sh restore                stop stack, bring ava back
+#   direct-mode.sh start [rgb|tof|both]   ava off, ros2dreame + cameras (default both)
+#   direct-mode.sh restore                stop, bring ava back
 #   direct-mode.sh status
 # ===========================================================================
 set -u
 DIR="$(cd "$(dirname "$0")" && pwd)"
-MCUD="${MCUD:-$DIR/w10-mcud}"
 R2D="${R2D:-$DIR/ros2dreame}"
 CAMSH="${CAMSH:-/data/camstream/noava-cam.sh}"
-CTRL_ADDR="${CTRL_ADDR:-127.0.0.1:7705}"
 
 sysmon() { ps 2>/dev/null | grep '[s]ys_monitor.sh ava' | awk '{print $1}'; }
 mon()    { ps 2>/dev/null | grep '[r]c.d/monitor.sh'     | awk '{print $1}'; }
@@ -31,36 +26,30 @@ resume() { for p in $(sysmon) $(mon); do kill -CONT "$p" 2>/dev/null; done; }
 case "${1:-status}" in
     start)
         CAM="${2:-both}"
-        [ -x "$MCUD" ] || { echo "ERROR: $MCUD missing (deploy first)"; exit 1; }
-        [ -x "$R2D" ]  || { echo "ERROR: $R2D missing (deploy first)"; exit 1; }
-        echo ">> freeze BOTH ava watchdogs, kill relay + ava"
+        [ -x "$R2D" ] || { echo "ERROR: $R2D missing (deploy first)"; exit 1; }
+        echo ">> freeze BOTH ava watchdogs, kill relay + ava (frees ttyS4/ttyS3)"
         killall avatap-relay 2>/dev/null
         freeze
         killall ava 2>/dev/null
         sleep 1
         mkdir -p /data/log
-        echo ">> start w10-mcud (ttyS4/ttyS3 -> 7701/7702, control 7705)"
-        setsid "$MCUD" >/data/log/mcud.log 2>&1 </dev/null &
-        sleep 2
-        pidof w10-mcud >/dev/null || { echo "ERROR: w10-mcud not up"; tail -5 /data/log/mcud.log; exit 1; }
         echo ">> start cameras ($CAM)"
         [ -x "$CAMSH" ] && sh "$CAMSH" start "$CAM" 2>&1 | tail -2 || echo "   (no camera stack at $CAMSH; skipping)"
-        echo ">> start ros2dreame (enables LDS turret via control $CTRL_ADDR)"
+        echo ">> start ros2dreame (drives MCU/LDS directly, turret on)"
         IR=""
         { [ "$CAM" = both ] || [ "$CAM" = tof ]; } && IR="W10_CAM_IR=1"
-        setsid env RUST_LOG=info W10_CTRL_ADDR="$CTRL_ADDR" $IR "$R2D" >/data/log/ros2dreame.log 2>&1 </dev/null &
+        setsid env RUST_LOG=info $IR "$R2D" >/data/log/ros2dreame.log 2>&1 </dev/null &
         sleep 2
         if pidof ros2dreame >/dev/null; then
             echo ">> UP (ava OFF). /scan /odom /tf + /camera(_ir). Restore: direct-mode.sh restore"
         else
-            echo ">> WARN: ros2dreame not up"; tail -6 /data/log/ros2dreame.log
+            echo ">> WARN: ros2dreame not up"; tail -8 /data/log/ros2dreame.log
         fi
         ;;
     restore)
-        echo ">> stop ros2dreame + cameras + w10-mcud, restart ava, resume watchdogs"
+        echo ">> stop ros2dreame + cameras, restart ava, resume watchdogs"
         killall ros2dreame 2>/dev/null
         [ -x "$CAMSH" ] && sh "$CAMSH" stop >/dev/null 2>&1
-        killall w10-mcud 2>/dev/null
         sleep 1
         /etc/rc.d/ava.sh >/dev/null 2>&1 &
         sleep 3
@@ -69,7 +58,7 @@ case "${1:-status}" in
         pidof ava >/dev/null && echo ">> ava back" || echo ">> WARN: ava not up yet"
         ;;
     status)
-        for p in ava w10-mcud ros2dreame w10-cam go2rtc; do
+        for p in ava ros2dreame w10-cam go2rtc; do
             echo -n "$p : "; pidof "$p" || echo none
         done
         ;;

@@ -1,11 +1,10 @@
-//! Tap-mode data source: read the robot's MCU + LDS serial streams mirrored by
-//! `avatap-relay` (TCP `mcu-rx` 7701 / `lds-rx` 7702), decode with the vendored
-//! `dreame-w10-proto`, and turn them into ROS 2 messages. Read-only: this runs
-//! alongside the vendor `ava`, which keeps driving.
+//! Decode helpers + the TCP tap data source.
 //!
-//! Each reader is its own blocking thread that reconnects on error (survives
-//! relay/ava restarts), and pushes finished messages over an mpsc channel to the
-//! publisher loop in `main`.
+//! The message builders (`odom_from_status`, `Sweep`/`build_scan`) are shared by
+//! both data sources: the `direct` serial driver (ava off) and this `tap` reader
+//! (ava on - reads `avatap-relay`'s `mcu-rx` 7701 / `lds-rx` 7702 mirror over TCP,
+//! read-only, alongside the vendor `ava`). Finished ROS 2 messages go over an
+//! mpsc channel to the publisher loop in `main`.
 
 use std::io::Read;
 use std::net::TcpStream;
@@ -13,8 +12,8 @@ use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 
-use dreame_w10_proto::lds::{LdsScanner, LDS_ANGLE_FULL};
-use dreame_w10_proto::{parse_body, FrameScanner, Msg};
+use dreame_w10_proto::lds::{LdsFrame, LdsScanner, LDS_ANGLE_FULL};
+use dreame_w10_proto::{parse_body, FrameScanner, Msg, Status20ms};
 
 use crate::msg::{
     self, Header, LaserScan, Odometry, Point, Pose, PoseWithCovariance, Twist,
@@ -52,6 +51,33 @@ fn wrap_pi(a: f32) -> f32 {
     a
 }
 
+/// `Status20ms` (pose/velocity) + IMU yaw rate -> `nav_msgs/Odometry`.
+pub(crate) fn odom_from_status(s: &Status20ms, gyro_z_dps: f32) -> Odometry {
+    let x_m = s.x_mm10 as f64 / 10.0 / 1000.0;
+    let y_m = s.y_mm10 as f64 / 10.0 / 1000.0;
+    let yaw = (s.yaw_deg() as f64).to_radians();
+    let v_lin = (s.left_vel as f64 + s.right_vel as f64) / 2.0 / 1000.0;
+    let v_ang = (gyro_z_dps as f64).to_radians();
+    Odometry {
+        header: Header { stamp: msg::now(), frame_id: "odom".into() },
+        child_frame_id: "base_link".into(),
+        pose: PoseWithCovariance {
+            pose: Pose {
+                position: Point { x: x_m, y: y_m, z: 0.0 },
+                orientation: msg::yaw_to_quat(yaw),
+            },
+            covariance: [0.0; 36],
+        },
+        twist: TwistWithCovariance {
+            twist: Twist {
+                linear: Vector3 { x: v_lin, y: 0.0, z: 0.0 },
+                angular: Vector3 { x: 0.0, y: 0.0, z: v_ang },
+            },
+            covariance: [0.0; 36],
+        },
+    }
+}
+
 /// Build a LaserScan from one accumulated sweep of (raw_angle_rad, dist_m).
 fn build_scan(pts: &[(f32, f32)]) -> Option<LaserScan> {
     if pts.is_empty() {
@@ -71,9 +97,8 @@ fn build_scan(pts: &[(f32, f32)]) -> Option<LaserScan> {
     let mut ranges = vec![f32::INFINITY; n];
     for (a, d) in tp {
         let i = (((a - angle_min) / SCAN_INCREMENT).round() as usize).min(n - 1);
-        // keep the nearest return in a bin
         if d < ranges[i] {
-            ranges[i] = d;
+            ranges[i] = d; // keep the nearest return in a bin
         }
     }
     Some(LaserScan {
@@ -90,7 +115,38 @@ fn build_scan(pts: &[(f32, f32)]) -> Option<LaserScan> {
     })
 }
 
-/// LDS reader: connect to `lds-rx`, de-frame, accumulate one arc sweep, publish.
+/// Accumulates LDS packets into arc sweeps. Push each decoded frame; a full
+/// LaserScan is returned when the arc restarts (fsa jumps backwards).
+pub(crate) struct Sweep {
+    pts: Vec<(f32, f32)>,
+    prev_fsa: Option<u16>,
+}
+
+impl Sweep {
+    pub(crate) fn new() -> Self {
+        Self { pts: Vec::with_capacity(256), prev_fsa: None }
+    }
+    pub(crate) fn push(&mut self, f: &LdsFrame) -> Option<LaserScan> {
+        let mut done = None;
+        if let Some(pf) = self.prev_fsa {
+            if (pf as i32 - f.fsa as i32) > FSA_WRAP {
+                done = build_scan(&self.pts);
+                self.pts.clear();
+            }
+        }
+        self.prev_fsa = Some(f.fsa);
+        for k in 0..f.samples.len() {
+            let s = f.samples[k];
+            if s.valid && s.dist_mm != 0 {
+                let a = f.sample_angle(k) as f32 / LDS_ANGLE_FULL as f32 * TAU;
+                self.pts.push((a, s.dist_mm as f32 / 1000.0));
+            }
+        }
+        done
+    }
+}
+
+/// LDS tap: connect to `lds-rx`, de-frame, accumulate sweeps, publish.
 pub fn lds_reader(addr: String, tx: Sender<Tap>) {
     let mut buf = [0u8; 4096];
     loop {
@@ -107,8 +163,7 @@ pub fn lds_reader(addr: String, tx: Sender<Tap>) {
             }
         };
         let mut sc = LdsScanner::new();
-        let mut pts: Vec<(f32, f32)> = Vec::with_capacity(256);
-        let mut prev_fsa: Option<u16> = None;
+        let mut sweep = Sweep::new();
         loop {
             let n = match stream.read(&mut buf) {
                 Ok(0) => break,
@@ -125,34 +180,19 @@ pub fn lds_reader(addr: String, tx: Sender<Tap>) {
                 }
             };
             for &b in &buf[..n] {
-                let Some(f) = sc.push(b) else { continue };
-                // sweep boundary: fsa jumped backwards (arc restarted)
-                if let Some(pf) = prev_fsa {
-                    if (pf as i32 - f.fsa as i32) > FSA_WRAP {
-                        if let Some(scan) = build_scan(&pts) {
-                            if tx.send(Tap::Scan(Box::new(scan))).is_err() {
-                                return;
-                            }
+                if let Some(f) = sc.push(b) {
+                    if let Some(scan) = sweep.push(&f) {
+                        if tx.send(Tap::Scan(Box::new(scan))).is_err() {
+                            return;
                         }
-                        pts.clear();
                     }
-                }
-                prev_fsa = Some(f.fsa);
-                for k in 0..f.samples.len() {
-                    let s = f.samples[k];
-                    if !s.valid || s.dist_mm == 0 {
-                        continue;
-                    }
-                    let a = f.sample_angle(k) as f32 / LDS_ANGLE_FULL as f32 * TAU;
-                    pts.push((a, s.dist_mm as f32 / 1000.0));
                 }
             }
         }
     }
 }
 
-/// MCU reader: connect to `mcu-rx`, de-frame, publish `/odom` on each pose
-/// update (Status20ms @20ms). Twist angular comes from the IMU yaw rate.
+/// MCU tap: connect to `mcu-rx`, de-frame, publish `/odom` per Status20ms.
 pub fn mcu_reader(addr: String, tx: Sender<Tap>) {
     let mut buf = [0u8; 4096];
     loop {
@@ -191,29 +231,7 @@ pub fn mcu_reader(addr: String, tx: Sender<Tap>) {
                 match Msg::decode(typ, payload) {
                     Msg::Status10ms(s) => gyro_z_dps = s.gyro_deg_s()[2],
                     Msg::Status20ms(s) => {
-                        let x_m = s.x_mm10 as f64 / 10.0 / 1000.0;
-                        let y_m = s.y_mm10 as f64 / 10.0 / 1000.0;
-                        let yaw = (s.yaw_deg() as f64).to_radians();
-                        let v_lin = (s.left_vel as f64 + s.right_vel as f64) / 2.0 / 1000.0;
-                        let v_ang = (gyro_z_dps as f64).to_radians();
-                        let odom = Odometry {
-                            header: Header { stamp: msg::now(), frame_id: "odom".into() },
-                            child_frame_id: "base_link".into(),
-                            pose: PoseWithCovariance {
-                                pose: Pose {
-                                    position: Point { x: x_m, y: y_m, z: 0.0 },
-                                    orientation: msg::yaw_to_quat(yaw),
-                                },
-                                covariance: [0.0; 36],
-                            },
-                            twist: TwistWithCovariance {
-                                twist: Twist {
-                                    linear: Vector3 { x: v_lin, y: 0.0, z: 0.0 },
-                                    angular: Vector3 { x: 0.0, y: 0.0, z: v_ang },
-                                },
-                                covariance: [0.0; 36],
-                            },
-                        };
+                        let odom = odom_from_status(&s, gyro_z_dps);
                         if tx.send(Tap::Odom(Box::new(odom))).is_err() {
                             return;
                         }

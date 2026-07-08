@@ -7,11 +7,13 @@ license = "MIT"
 authors = ["ros2dreame"]
 
 [workspace]
-members = ["dreame-proto", "w10-mcud"]
+members = ["dreame-proto"]
 
 [dependencies]
 # Shared Dreame MCU/LDS protocol (vendored, no_std, no deps).
 dreame-w10-proto = { path = "dreame-proto" }
+# Serial port termios setup for the direct MCU/LDS driver (src/direct.rs).
+libc = "0.2"
 
 # Pure-Rust ROS 2 client (RustDDS underneath: no rcl/rmw, no C DDS, no ROS 2
 # install). This is what lets the whole thing be one static musl binary.

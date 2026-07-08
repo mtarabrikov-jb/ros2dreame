@@ -1300,6 +1300,7 @@ version = "0.1.0"
 dependencies = [
  "dreame-w10-proto",
  "env_logger",
+ "libc",
  "log",
  "ros2-client",
  "serde",
@@ -1609,14 +1610,6 @@ dependencies = [
  "rand 0.10.2",
  "serde_core",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "w10-mcud"
-version = "0.1.0"
-dependencies = [
- "dreame-w10-proto",
- "libc",
 ]
 
 [[package]]
