@@ -1,0 +1,32 @@
+# Host-side ROS 2 GUI container for ros2dreame. Linux + an X server.
+#
+#   make up        build (first time) + start, allow X access
+#   make rviz      /scan /odom /tf + robot pose in rviz2
+#   make rqt       full rqt GUI (topic monitor, image view, plots, publisher)
+#   make steer     GUI drive sliders -> /cmd_vel  (drive the vacuum by mouse)
+#   make teleop    keyboard teleop -> /cmd_vel
+#   make topics    ros2 topic list
+#   make shell     a shell inside the container
+#   make down      stop
+#
+# network_mode host so DDS reaches the robot (10.0.5.x); ROS_DOMAIN_ID must match
+# ros2dreame (0). DISPLAY + the X socket give the GUIs a screen.
+services:
+  ros2dreame-gui:
+    build: .
+    image: ros2dreame-gui:jazzy
+    container_name: ros2dreame-gui
+    network_mode: host
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - ROS_DISTRO=jazzy
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      - FASTRTPS_DEFAULT_PROFILES_FILE=/cfg/fastdds_no_shm.xml
+      - DISPLAY=${DISPLAY:-:0}
+      - QT_X11_NO_MITSHM=1
+      - LIBGL_ALWAYS_SOFTWARE=${LIBGL_ALWAYS_SOFTWARE:-1}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./fastdds_no_shm.xml:/cfg/fastdds_no_shm.xml:ro
+      - ../rviz:/cfg/rviz:ro
+    command: sleep infinity

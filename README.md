@@ -79,6 +79,19 @@ deploy/direct-mode.sh restore    # ava back
 `start` (nav) and `observe` (park) are mutually exclusive because the firmware
 only streams the RGB camera when the robot is idle - see [docs/MCU.md](docs/MCU.md).
 
+## GUI (host side)
+
+See every topic and drive the vacuum from a GUI, in Docker, with no ROS 2
+install (Linux + an X server). See [host/README.md](host/README.md):
+
+```sh
+cd host
+make up      # build + start the ROS 2 Jazzy desktop container (net=host, X11)
+make rqt     # topics, images, plots, message publisher (actuators)
+make steer   # drive sliders -> /cmd_vel
+make rviz    # /scan /odom /tf + pose
+```
+
 ## Vendored (self-contained)
 
 - `dreame-proto/` - the Dreame MCU/LDS protocol (pure `no_std`, no deps): framing,
