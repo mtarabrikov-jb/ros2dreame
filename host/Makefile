@@ -7,13 +7,15 @@ SRC  := source /opt/ros/jazzy/setup.bash &&
 GUI  := $(DC) exec -d $(SVC) bash -c   # detached: GUI opens, make returns
 RUN  := $(DC) exec $(SVC) bash -c      # attached (stdin): terminal tools
 
-.PHONY: build up down shell topics rviz rqt steer image tf teleop
+.PHONY: build up all down shell topics rviz rqt steer image tf teleop
 build:
 	$(DC) build
 up:
 	-xhost +local: >/dev/null 2>&1 || true
 	$(DC) up -d
-	@echo ">> up. Try: make rqt  |  make rviz  |  make steer"
+	@echo ">> up. Try: make all  |  make rqt  |  make rviz  |  make steer"
+all: up rviz rqt steer image   ## up + every GUI window at once
+	@echo ">> launched: rviz, rqt, robot-steering, image view"
 down:
 	$(DC) down
 shell:

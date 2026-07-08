@@ -7,6 +7,8 @@ and Docker with the `compose` plugin.
 ```sh
 cd host
 make up        # build (first run) + start the container + allow X access
+make all       # launch ALL windows at once: rviz + rqt + steering + image view
+# or individually:
 make rqt       # the all-in-one GUI (topics, images, plots, publisher)
 make steer     # drive sliders -> /cmd_vel (steer the vacuum with the mouse)
 make rviz      # /scan /odom /tf + robot pose
