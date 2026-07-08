@@ -16,8 +16,8 @@ use dreame_w10_proto::lds::{LdsFrame, LdsScanner, LDS_ANGLE_FULL};
 use dreame_w10_proto::{parse_body, Battery, FrameScanner, Msg, Status10ms, Status20ms};
 
 use crate::msg::{
-    self, BatteryState, Header, Imu, LaserScan, Odometry, Point, Pose, PoseWithCovariance, Twist,
-    TwistWithCovariance, Vector3,
+    self, BatteryState, Header, Imu, Int16MultiArray, LaserScan, Odometry, Point, Pose,
+    PoseWithCovariance, Twist, TwistWithCovariance, Vector3,
 };
 
 /// A finished message from a reader thread, ready to publish.
@@ -28,6 +28,8 @@ pub enum Tap {
     Imu(Box<Imu>),
     Battery(Box<BatteryState>),
     Triggers { dock: bool, bumper: bool, cliff: bool },
+    /// [wheel_left, wheel_right, main_brush, side_brush, load] raw i16 currents.
+    Currents(Box<Int16MultiArray>),
 }
 
 // --- LDS -> LaserScan geometry (W10) -----------------------------------------
@@ -125,6 +127,12 @@ pub(crate) fn battery_msg(b: &Battery) -> BatteryState {
         location: String::new(),
         serial_number: String::new(),
     }
+}
+
+/// Motor currents -> `std_msgs/Int16MultiArray`
+/// `[wheel_left, wheel_right, main_brush, side_brush, load]` (raw i16 counts).
+pub(crate) fn currents_msg(wl: i16, wr: i16, main: i16, side: i16, load: i16) -> Int16MultiArray {
+    Int16MultiArray { layout: Default::default(), data: vec![wl, wr, main, side, load] }
 }
 
 /// Build a LaserScan from one accumulated sweep of (raw_angle_rad, dist_m).
@@ -259,6 +267,7 @@ pub fn mcu_reader(addr: String, tx: Sender<Tap>) {
         };
         let mut fs = FrameScanner::new();
         let mut gyro_z_dps: f32 = 0.0;
+        let (mut wl, mut wr, mut load) = (0i16, 0i16, 0i16);
         loop {
             let n = match stream.read(&mut buf) {
                 Ok(0) => break,
@@ -283,10 +292,18 @@ pub fn mcu_reader(addr: String, tx: Sender<Tap>) {
                         let _ = tx.send(Tap::Imu(Box::new(imu_from_status10(&s))));
                     }
                     Msg::Status20ms(s) => {
+                        let _ = tx.send(Tap::Currents(Box::new(currents_msg(
+                            wl, wr, s.roller_current, s.sidebrush_current, load,
+                        ))));
                         let odom = odom_from_status(&s, gyro_z_dps);
                         if tx.send(Tap::Odom(Box::new(odom))).is_err() {
                             return;
                         }
+                    }
+                    Msg::Status100ms(s) => {
+                        wl = s.left_current;
+                        wr = s.right_current;
+                        load = s.load;
                     }
                     Msg::Battery(b) => {
                         let _ = tx.send(Tap::Battery(Box::new(battery_msg(&b))));

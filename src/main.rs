@@ -213,6 +213,10 @@ fn main() {
         let t = mk_pub(&mut node, "/", "cliff", "std_msgs", "Bool");
         node.create_publisher::<msg::Bool>(&t, None).expect("cliff pub")
     };
+    let currents_pub = {
+        let t = mk_pub(&mut node, "/", "motor_currents", "std_msgs", "Int16MultiArray");
+        node.create_publisher::<msg::Int16MultiArray>(&t, None).expect("currents pub")
+    };
 
     // Camera publishers: /<frame>/image_raw/compressed (image_transport compressed).
     let mut img_pubs: Vec<(String, ros2_client::Publisher<msg::CompressedImage>)> = Vec::new();
@@ -341,6 +345,9 @@ fn main() {
                 let _ = dock_pub.publish(msg::Bool { data: dock });
                 let _ = bumper_pub.publish(msg::Bool { data: bumper });
                 let _ = cliff_pub.publish(msg::Bool { data: cliff });
+            }
+            Tap::Currents(c) => {
+                let _ = currents_pub.publish(*c);
             }
         }
     }

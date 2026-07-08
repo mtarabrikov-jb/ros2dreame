@@ -90,6 +90,28 @@ pub struct UInt8 {
     pub data: u8,
 }
 
+/// std_msgs/MultiArrayDimension
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct MultiArrayDimension {
+    pub label: String,
+    pub size: u32,
+    pub stride: u32,
+}
+
+/// std_msgs/MultiArrayLayout
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct MultiArrayLayout {
+    pub dim: Vec<MultiArrayDimension>,
+    pub data_offset: u32,
+}
+
+/// std_msgs/Int16MultiArray
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct Int16MultiArray {
+    pub layout: MultiArrayLayout,
+    pub data: Vec<i16>,
+}
+
 // --- geometry_msgs ---
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

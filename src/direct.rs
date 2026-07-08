@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use dreame_w10_proto::lds::LdsScanner;
 use dreame_w10_proto::{encode_frame, encode_motor_ctrl, parse_body, FrameScanner, Msg};
 
-use crate::tap::{battery_msg, imu_from_status10, odom_from_status, Sweep, Tap};
+use crate::tap::{battery_msg, currents_msg, imu_from_status10, odom_from_status, Sweep, Tap};
 
 const MAX_LINEAR_MM_S: f32 = 150.0;
 const MAX_ROT_RAD_S: f32 = 1.5;
@@ -123,6 +123,7 @@ fn rx_loop(mut rd: File, w: Arc<Mutex<File>>, sh: Arc<Shared>, tx: Sender<Tap>) 
     let mut sc = FrameScanner::new();
     let mut buf = [0u8; 4096];
     let mut gyro_z_dps: f32 = 0.0;
+    let (mut wl, mut wr, mut load) = (0i16, 0i16, 0i16);
     while !sh.shutdown.load(Ordering::Relaxed) {
         let n = match rd.read(&mut buf) {
             Ok(0) => continue,
@@ -145,10 +146,18 @@ fn rx_loop(mut rd: File, w: Arc<Mutex<File>>, sh: Arc<Shared>, tx: Sender<Tap>) 
                     let _ = tx.send(Tap::Imu(Box::new(imu_from_status10(&s))));
                 }
                 Msg::Status20ms(s) => {
+                    let _ = tx.send(Tap::Currents(Box::new(currents_msg(
+                        wl, wr, s.roller_current, s.sidebrush_current, load,
+                    ))));
                     let odom = odom_from_status(&s, gyro_z_dps);
                     if tx.send(Tap::Odom(Box::new(odom))).is_err() {
                         return;
                     }
+                }
+                Msg::Status100ms(s) => {
+                    wl = s.left_current;
+                    wr = s.right_current;
+                    load = s.load;
                 }
                 Msg::Triggers(t) => {
                     // bumpers/wheel-float (raw[0] bits 4-7) or any cliff (raw[1]).
