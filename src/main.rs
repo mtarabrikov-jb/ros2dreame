@@ -242,23 +242,48 @@ fn main() {
                 &sensor_qos(),
             )
             .expect("cmd_vel topic");
-        let sub = node
+        let cmd_sub = node
             .create_subscription::<msg::Twist>(&cmd_topic, Some(sensor_qos()))
             .expect("cmd_vel sub");
-        thread::spawn(move || {
-            log::info!("cmd_vel: subscribed (Twist -> MotorCtrl)");
-            loop {
-                match sub.take() {
-                    Ok(Some((t, _))) => {
-                        let lin_mm_s = (t.linear.x * 1000.0) as f32; // m/s -> mm/s
-                        let rot = t.angular.z as f32; // rad/s
-                        log::info!("cmd_vel: lin={lin_mm_s:.0} mm/s ang={rot:.2} rad/s");
-                        drive.set_drive(lin_mm_s, rot);
+        {
+            let drive = drive.clone();
+            thread::spawn(move || {
+                log::info!("cmd_vel: subscribed (Twist -> MotorCtrl)");
+                loop {
+                    match cmd_sub.take() {
+                        Ok(Some((t, _))) => {
+                            let lin_mm_s = (t.linear.x * 1000.0) as f32; // m/s -> mm/s
+                            let rot = t.angular.z as f32; // rad/s
+                            drive.set_drive(lin_mm_s, rot);
+                        }
+                        _ => thread::sleep(std::time::Duration::from_millis(10)),
                     }
-                    _ => thread::sleep(std::time::Duration::from_millis(10)),
                 }
-            }
-        });
+            });
+        }
+
+        // Actuators: std_msgs/UInt8 levels -> the periodic SetCleaning frame.
+        for (name, set) in [
+            ("set_fan", direct::Shared::set_fan as fn(&direct::Shared, u8)),
+            ("set_side_brush", direct::Shared::set_side_brush),
+            ("set_main_brush", direct::Shared::set_main_brush),
+            ("set_water_pump", direct::Shared::set_pump),
+        ] {
+            let topic = node
+                .create_topic(&Name::new("/", name).unwrap(), MessageTypeName::new("std_msgs", "UInt8"), &sensor_qos())
+                .expect("actuator topic");
+            let sub = node
+                .create_subscription::<msg::UInt8>(&topic, Some(sensor_qos()))
+                .expect("actuator sub");
+            let d = drive.clone();
+            thread::spawn(move || loop {
+                match sub.take() {
+                    Ok(Some((m, _))) => set(&d, m.data),
+                    _ => thread::sleep(std::time::Duration::from_millis(20)),
+                }
+            });
+        }
+        log::info!("actuators: subscribed (/set_fan /set_side_brush /set_main_brush /set_water_pump)");
     }
 
     // Static base_link -> laser, published once (transient-local keeps it for

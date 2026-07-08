@@ -84,6 +84,12 @@ pub struct Bool {
     pub data: bool,
 }
 
+/// std_msgs/UInt8
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct UInt8 {
+    pub data: u8,
+}
+
 // --- geometry_msgs ---
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

@@ -13,7 +13,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -47,6 +47,11 @@ pub struct Shared {
     linear_bits: AtomicU32,
     rot_bits: AtomicU32,
     last_cmd_ms: AtomicU64,
+    // actuator levels (0..~150), sent in the periodic SetCleaning frame.
+    side_brush: AtomicU8,
+    main_brush: AtomicU8,
+    fan: AtomicU8,
+    pump: AtomicU8,
 }
 
 impl Shared {
@@ -54,12 +59,23 @@ impl Shared {
         self.start.elapsed().as_millis() as u64
     }
     /// Set a drive command (mm/s, rad/s). Latches the watchdog. For /cmd_vel.
-    #[allow(dead_code)]
     pub fn set_drive(&self, linear_mm_s: f32, rot_rad_s: f32) {
         self.linear_bits.store(linear_mm_s.to_bits(), Ordering::Relaxed);
         self.rot_bits.store(rot_rad_s.to_bits(), Ordering::Relaxed);
         self.last_cmd_ms.store(self.now_ms(), Ordering::Relaxed);
         self.enabled.store(true, Ordering::Relaxed);
+    }
+    pub fn set_side_brush(&self, v: u8) {
+        self.side_brush.store(v, Ordering::Relaxed);
+    }
+    pub fn set_main_brush(&self, v: u8) {
+        self.main_brush.store(v, Ordering::Relaxed);
+    }
+    pub fn set_fan(&self, v: u8) {
+        self.fan.store(v, Ordering::Relaxed);
+    }
+    pub fn set_pump(&self, v: u8) {
+        self.pump.store(v, Ordering::Relaxed);
     }
 }
 
@@ -166,7 +182,20 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
             send(&w, 0x02, &[0x21]); // SetLED / heartbeat
         }
         if tick % 50 == 10 {
-            send(&w, 0x01, &[0x00, 0x01, 0x00, 0x00, 0x00, 0x00]); // SetCleaning idle
+            // SetCleaning `[side, main, fan, pump, mode, 0]`. Idle keeps ava's
+            // exact frame; any commanded actuator switches to vacuum mode (0x03).
+            let (sb, mb, fan, pump) = (
+                sh.side_brush.load(Ordering::Relaxed),
+                sh.main_brush.load(Ordering::Relaxed),
+                sh.fan.load(Ordering::Relaxed),
+                sh.pump.load(Ordering::Relaxed),
+            );
+            let p = if sb | mb | fan | pump == 0 {
+                [0x00, 0x01, 0x00, 0x00, 0x00, 0x00]
+            } else {
+                [sb, mb, fan, pump, 0x03, 0x00]
+            };
+            send(&w, 0x01, &p);
         }
         if observe {
             // Idle/parked: a zero MotorCtrl keeps the MCU streaming telemetry
@@ -265,6 +294,10 @@ pub fn run(mcu_path: &str, lds_path: &str, observe: bool, tx: Sender<Tap>) -> Ar
         linear_bits: AtomicU32::new(0),
         rot_bits: AtomicU32::new(0),
         last_cmd_ms: AtomicU64::new(0),
+        side_brush: AtomicU8::new(0),
+        main_brush: AtomicU8::new(0),
+        fan: AtomicU8::new(0),
+        pump: AtomicU8::new(0),
     });
 
     let rd = match open_serial(mcu_path, libc::B115200) {
