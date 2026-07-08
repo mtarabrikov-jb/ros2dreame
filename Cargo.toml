@@ -17,10 +17,7 @@ dreame-w10-proto = { path = "dreame-proto" }
 # install). This is what lets the whole thing be one static musl binary.
 ros2-client = "0.10"
 serde = { version = "1", features = ["derive"] }
-
-# ros2-client is async; smol is the light executor used for its streams.
-smol = "2"
-futures = "0.3"
+serde-big-array = "0.5"   # CDR fixed arrays (Odometry covariance [f64; 36])
 
 log = "0.4"
 env_logger = "0.11"
