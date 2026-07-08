@@ -45,6 +45,45 @@ pub struct CompressedImage {
     pub data: Vec<u8>,
 }
 
+/// sensor_msgs/Imu ([f64; 9] <= 32 so no BigArray needed).
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct Imu {
+    pub header: Header,
+    pub orientation: Quaternion,
+    pub orientation_covariance: [f64; 9],
+    pub angular_velocity: Vector3,
+    pub angular_velocity_covariance: [f64; 9],
+    pub linear_acceleration: Vector3,
+    pub linear_acceleration_covariance: [f64; 9],
+}
+
+/// sensor_msgs/BatteryState
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct BatteryState {
+    pub header: Header,
+    pub voltage: f32,
+    pub temperature: f32,
+    pub current: f32,
+    pub charge: f32,
+    pub capacity: f32,
+    pub design_capacity: f32,
+    pub percentage: f32, // 0..1
+    pub power_supply_status: u8,
+    pub power_supply_health: u8,
+    pub power_supply_technology: u8,
+    pub present: bool,
+    pub cell_voltage: Vec<f32>,
+    pub cell_temperature: Vec<f32>,
+    pub location: String,
+    pub serial_number: String,
+}
+
+/// std_msgs/Bool
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct Bool {
+    pub data: bool,
+}
+
 // --- geometry_msgs ---
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

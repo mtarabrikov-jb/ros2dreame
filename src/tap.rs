@@ -13,10 +13,10 @@ use std::thread;
 use std::time::Duration;
 
 use dreame_w10_proto::lds::{LdsFrame, LdsScanner, LDS_ANGLE_FULL};
-use dreame_w10_proto::{parse_body, FrameScanner, Msg, Status20ms};
+use dreame_w10_proto::{parse_body, Battery, FrameScanner, Msg, Status10ms, Status20ms};
 
 use crate::msg::{
-    self, Header, LaserScan, Odometry, Point, Pose, PoseWithCovariance, Twist,
+    self, BatteryState, Header, Imu, LaserScan, Odometry, Point, Pose, PoseWithCovariance, Twist,
     TwistWithCovariance, Vector3,
 };
 
@@ -25,6 +25,9 @@ pub enum Tap {
     Odom(Box<Odometry>),
     Scan(Box<LaserScan>),
     Image(Box<crate::msg::CompressedImage>),
+    Imu(Box<Imu>),
+    Battery(Box<BatteryState>),
+    Triggers { dock: bool, bumper: bool, cliff: bool },
 }
 
 // --- LDS -> LaserScan geometry (W10) -----------------------------------------
@@ -75,6 +78,52 @@ pub(crate) fn odom_from_status(s: &Status20ms, gyro_z_dps: f32) -> Odometry {
             },
             covariance: [0.0; 36],
         },
+    }
+}
+
+/// `Status10ms` (IMU) -> `sensor_msgs/Imu`. Gyro deg/s -> rad/s, accel g -> m/s2.
+/// No absolute orientation (covariance[0] = -1 marks it unknown).
+pub(crate) fn imu_from_status10(s: &Status10ms) -> Imu {
+    let g = s.gyro_deg_s();
+    let a = s.accel_g();
+    let mut imu = Imu {
+        header: Header { stamp: msg::now(), frame_id: "base_link".into() },
+        angular_velocity: Vector3 {
+            x: (g[0] as f64).to_radians(),
+            y: (g[1] as f64).to_radians(),
+            z: (g[2] as f64).to_radians(),
+        },
+        linear_acceleration: Vector3 {
+            x: a[0] as f64 * 9.80665,
+            y: a[1] as f64 * 9.80665,
+            z: a[2] as f64 * 9.80665,
+        },
+        ..Default::default()
+    };
+    imu.orientation_covariance[0] = -1.0;
+    imu
+}
+
+/// `Battery` (0x2b) -> `sensor_msgs/BatteryState`.
+pub(crate) fn battery_msg(b: &Battery) -> BatteryState {
+    let charging = b.charge_voltage_mv > 1000;
+    BatteryState {
+        header: Header { stamp: msg::now(), frame_id: "base_link".into() },
+        voltage: b.voltage_v(),
+        temperature: b.temperature_ddeg as f32 / 10.0,
+        current: b.current_ma as f32 / 1000.0,
+        charge: f32::NAN,
+        capacity: f32::NAN,
+        design_capacity: f32::NAN,
+        percentage: (b.soc_percent() / 100.0).clamp(0.0, 1.0),
+        power_supply_status: if charging { 1 } else { 2 }, // CHARGING / DISCHARGING
+        power_supply_health: 0,      // UNKNOWN
+        power_supply_technology: 3,  // LION
+        present: true,
+        cell_voltage: Vec::new(),
+        cell_temperature: Vec::new(),
+        location: String::new(),
+        serial_number: String::new(),
     }
 }
 
@@ -229,12 +278,25 @@ pub fn mcu_reader(addr: String, tx: Sender<Tap>) {
                 let Some(body) = fs.push(b) else { continue };
                 let Ok((typ, payload)) = parse_body(body) else { continue };
                 match Msg::decode(typ, payload) {
-                    Msg::Status10ms(s) => gyro_z_dps = s.gyro_deg_s()[2],
+                    Msg::Status10ms(s) => {
+                        gyro_z_dps = s.gyro_deg_s()[2];
+                        let _ = tx.send(Tap::Imu(Box::new(imu_from_status10(&s))));
+                    }
                     Msg::Status20ms(s) => {
                         let odom = odom_from_status(&s, gyro_z_dps);
                         if tx.send(Tap::Odom(Box::new(odom))).is_err() {
                             return;
                         }
+                    }
+                    Msg::Battery(b) => {
+                        let _ = tx.send(Tap::Battery(Box::new(battery_msg(&b))));
+                    }
+                    Msg::Triggers(t) => {
+                        let _ = tx.send(Tap::Triggers {
+                            dock: t.dock_sta(),
+                            bumper: t.left_bumper() || t.right_bumper(),
+                            cliff: t.any_cliff(),
+                        });
                     }
                     _ => {}
                 }

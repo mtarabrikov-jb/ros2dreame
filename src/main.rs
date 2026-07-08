@@ -186,6 +186,34 @@ fn main() {
         .create_publisher::<TFMessage>(&tf_static_topic, None)
         .expect("tf_static pub");
 
+    // Extra telemetry: IMU, battery, and the Triggers booleans (dock/bumper/cliff).
+    let mk_pub = |node: &mut ros2_client::Node, ns: &str, name: &str, pkg: &str, ty: &str| {
+        let topic = node
+            .create_topic(&Name::new(ns, name).unwrap(), MessageTypeName::new(pkg, ty), &sensor_qos())
+            .expect("topic");
+        topic
+    };
+    let imu_pub = {
+        let t = mk_pub(&mut node, "/", "imu", "sensor_msgs", "Imu");
+        node.create_publisher::<msg::Imu>(&t, None).expect("imu pub")
+    };
+    let battery_pub = {
+        let t = mk_pub(&mut node, "/", "battery", "sensor_msgs", "BatteryState");
+        node.create_publisher::<msg::BatteryState>(&t, None).expect("battery pub")
+    };
+    let dock_pub = {
+        let t = mk_pub(&mut node, "/", "dock", "std_msgs", "Bool");
+        node.create_publisher::<msg::Bool>(&t, None).expect("dock pub")
+    };
+    let bumper_pub = {
+        let t = mk_pub(&mut node, "/", "bumper", "std_msgs", "Bool");
+        node.create_publisher::<msg::Bool>(&t, None).expect("bumper pub")
+    };
+    let cliff_pub = {
+        let t = mk_pub(&mut node, "/", "cliff", "std_msgs", "Bool");
+        node.create_publisher::<msg::Bool>(&t, None).expect("cliff pub")
+    };
+
     // Camera publishers: /<frame>/image_raw/compressed (image_transport compressed).
     let mut img_pubs: Vec<(String, ros2_client::Publisher<msg::CompressedImage>)> = Vec::new();
     for (frame, _port) in &cams {
@@ -277,6 +305,17 @@ fn main() {
                     let _ = p.publish(*img);
                     n_img += 1;
                 }
+            }
+            Tap::Imu(i) => {
+                let _ = imu_pub.publish(*i);
+            }
+            Tap::Battery(b) => {
+                let _ = battery_pub.publish(*b);
+            }
+            Tap::Triggers { dock, bumper, cliff } => {
+                let _ = dock_pub.publish(msg::Bool { data: dock });
+                let _ = bumper_pub.publish(msg::Bool { data: bumper });
+                let _ = cliff_pub.publish(msg::Bool { data: cliff });
             }
         }
     }

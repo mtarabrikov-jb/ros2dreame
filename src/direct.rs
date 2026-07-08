@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use dreame_w10_proto::lds::LdsScanner;
 use dreame_w10_proto::{encode_frame, encode_motor_ctrl, parse_body, FrameScanner, Msg};
 
-use crate::tap::{odom_from_status, Sweep, Tap};
+use crate::tap::{battery_msg, imu_from_status10, odom_from_status, Sweep, Tap};
 
 const MAX_LINEAR_MM_S: f32 = 150.0;
 const MAX_ROT_RAD_S: f32 = 1.5;
@@ -124,7 +124,10 @@ fn rx_loop(mut rd: File, w: Arc<Mutex<File>>, sh: Arc<Shared>, tx: Sender<Tap>) 
                 continue;
             }
             match Msg::decode(typ, payload) {
-                Msg::Status10ms(s) => gyro_z_dps = s.gyro_deg_s()[2],
+                Msg::Status10ms(s) => {
+                    gyro_z_dps = s.gyro_deg_s()[2];
+                    let _ = tx.send(Tap::Imu(Box::new(imu_from_status10(&s))));
+                }
                 Msg::Status20ms(s) => {
                     let odom = odom_from_status(&s, gyro_z_dps);
                     if tx.send(Tap::Odom(Box::new(odom))).is_err() {
@@ -135,6 +138,14 @@ fn rx_loop(mut rd: File, w: Arc<Mutex<File>>, sh: Arc<Shared>, tx: Sender<Tap>) 
                     // bumpers/wheel-float (raw[0] bits 4-7) or any cliff (raw[1]).
                     let hz = (t.raw[0] & 0xF0) != 0 || t.raw[1] != 0;
                     sh.hazard.store(hz, Ordering::Relaxed);
+                    let _ = tx.send(Tap::Triggers {
+                        dock: t.dock_sta(),
+                        bumper: t.left_bumper() || t.right_bumper(),
+                        cliff: t.any_cliff(),
+                    });
+                }
+                Msg::Battery(b) => {
+                    let _ = tx.send(Tap::Battery(Box::new(battery_msg(&b))));
                 }
                 _ => {}
             }

@@ -23,11 +23,13 @@ Working, ava OFF, one binary (verified on the robot -> a Jazzy container):
   camera only streams when the robot is idle/parked, so RGB comes from **observe
   mode** while `/scan` + `/odom` + IR come from **nav mode** (see [docs/MCU.md](docs/MCU.md)).
 
+- `/imu` `sensor_msgs/Imu`, `/battery` `sensor_msgs/BatteryState`,
+  `/dock` `/bumper` `/cliff` `std_msgs/Bool` (from Triggers)
+- `/cmd_vel` `geometry_msgs/Twist` -> `MotorCtrl` (teleop; gated by watchdog +
+  clamp + cliff/bump hazard). Verified: drove the robot 7.6 cm from the container.
+
 Planned next:
-- `/imu`, `/battery`, `/bumper`, `/cliff`, `/dock` (+ raw dock-IR), motor currents
-- `/cmd_vel` `geometry_msgs/Twist` -> `MotorCtrl` (the direct driver already has
-  the gated drive path; `Shared::set_drive` just needs a subscriber) + actuator
-  services (suction / brushes / water pump / LED)
+- raw dock-IR + motor currents; actuator services (suction / brushes / pump / LED)
 
 ## Data sources
 
