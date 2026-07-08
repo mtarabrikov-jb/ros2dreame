@@ -28,8 +28,13 @@ rqt:                        ## everything: topics, images, plots, publisher
 	$(GUI) '$(SRC) rqt'
 steer:                      ## GUI drive sliders -> /cmd_vel
 	$(GUI) '$(SRC) ros2 run rqt_robot_steering rqt_robot_steering'
-image:                      ## camera viewer (/camera, /camera_ir)
+REPUB = ros2 run image_transport republish --ros-args -p in_transport:=compressed -p out_transport:=raw
+image:                      ## camera viewer: republishes compressed->raw so rqt just shows it
+	$(RUN) 'pkill -f image_republisher 2>/dev/null; true'
+	$(GUI) '$(SRC) $(REPUB) -r in/compressed:=/camera_ir/image_raw/compressed -r out:=/camera_ir/repub'
+	$(GUI) '$(SRC) $(REPUB) -r in/compressed:=/camera/image_raw/compressed    -r out:=/camera/repub'
 	$(GUI) '$(SRC) ros2 run rqt_image_view rqt_image_view'
+	@echo ">> in rqt_image_view pick /camera_ir/repub (IR, nav) or /camera/repub (RGB, observe)"
 tf:                         ## TF tree
 	$(GUI) '$(SRC) ros2 run rqt_tf_tree rqt_tf_tree'
 teleop:                     ## keyboard teleop -> /cmd_vel (needs this terminal)
