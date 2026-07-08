@@ -1,13 +1,15 @@
-//! Camera source: read an MJPEG stream over HTTP and republish each frame as
-//! `sensor_msgs/CompressedImage` (format "jpeg"). Works the same whether the
-//! MJPEG is fed by the vendor `ava` stack or the no-ava standalone `w10-cam`
-//! stack - it just reads go2rtc, which is up in both. No image decode: we pass
-//! the JPEG bytes straight through, so this is cheap.
+//! Camera source: read MJPEG from the vendored camera helper (`w10-camd`) over
+//! loopback and republish each JPEG as `sensor_msgs/CompressedImage`. No go2rtc.
+//!
+//! Why a helper: driving the camera needs the vendor `libsunxicamera.so`, which
+//! must be `dlopen`'d - and a fully static musl binary (like ros2dreame) has no
+//! dynamic loader, so it can't. `w10-camd` is a small DYNAMIC binary that does
+//! the `dlopen` + capture + JPEG and serves MJPEG on loopback; ros2dreame stays
+//! static and just forwards the frames. Source is vendored under `cam-helper/`.
 //!
 //! Minimal hand-rolled HTTP/1.0 GET + JPEG splitter (loopback, no TLS, no HTTP
 //! crate): scan the byte stream for SOI (FF D8) .. EOI (FF D9) and emit each
-//! complete JPEG. Robust to the multipart/x-mixed-replace headers (they contain
-//! no FF D8).
+//! complete JPEG. Robust to the multipart/x-mixed-replace headers (no FF D8).
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -32,16 +34,14 @@ fn extract_jpegs(acc: &mut Vec<u8>) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     loop {
         let Some(soi) = find(acc, [0xFF, 0xD8], 0) else {
-            // no start-of-image; keep only a trailing byte (a split FF)
             if acc.len() > 1 {
-                acc.drain(0..acc.len() - 1);
+                acc.drain(0..acc.len() - 1); // keep a trailing split FF
             }
             break;
         };
         let Some(eoi) = find(acc, [0xFF, 0xD9], soi + 2) else {
-            // frame still incomplete; drop junk before it to bound memory
             if soi > 0 {
-                acc.drain(0..soi);
+                acc.drain(0..soi); // drop junk before the incomplete frame
             }
             if acc.len() > MAX_ACC {
                 acc.clear();
@@ -54,13 +54,10 @@ fn extract_jpegs(acc: &mut Vec<u8>) -> Vec<Vec<u8>> {
     out
 }
 
-fn stream_once(addr: &str, src: &str, frame_id: &str, tx: &Sender<Tap>) -> std::io::Result<()> {
+fn stream_once(addr: &str, frame_id: &str, tx: &Sender<Tap>) -> std::io::Result<()> {
     let mut s = TcpStream::connect(addr)?;
-    let req = format!(
-        "GET /api/stream.mjpeg?src={src} HTTP/1.0\r\nHost: {addr}\r\nAccept: multipart/x-mixed-replace\r\n\r\n"
-    );
-    s.write_all(req.as_bytes())?;
-    log::info!("cam[{frame_id}]: streaming http://{addr}/api/stream.mjpeg?src={src}");
+    s.write_all(format!("GET /stream HTTP/1.0\r\nHost: {addr}\r\n\r\n").as_bytes())?;
+    log::info!("cam[{frame_id}]: streaming MJPEG from {addr}");
     let mut buf = [0u8; 32768];
     let mut acc: Vec<u8> = Vec::with_capacity(128 * 1024);
     loop {
@@ -82,10 +79,10 @@ fn stream_once(addr: &str, src: &str, frame_id: &str, tx: &Sender<Tap>) -> std::
     }
 }
 
-/// Camera reader thread: reconnecting MJPEG -> CompressedImage on `frame_id`.
-pub fn cam_reader(addr: String, src: String, frame_id: String, tx: Sender<Tap>) {
+/// Camera reader thread: reconnecting MJPEG (from `w10-camd`) -> CompressedImage.
+pub fn cam_reader(addr: String, frame_id: String, tx: Sender<Tap>) {
     loop {
-        if let Err(e) = stream_once(&addr, &src, &frame_id, &tx) {
+        if let Err(e) = stream_once(&addr, &frame_id, &tx) {
             log::warn!("cam[{frame_id}]: {e}; reconnect");
         }
         thread::sleep(Duration::from_millis(500));

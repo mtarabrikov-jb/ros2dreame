@@ -18,7 +18,9 @@ Working, ava OFF, one binary (verified on the robot -> a Jazzy container):
 - `/odom` `nav_msgs/Odometry` + `/tf` (`odom -> base_link`) + `/tf_static`
   (`base_link -> laser`)
 - `/camera/image_raw/compressed`, `/camera_ir/image_raw/compressed`
-  `sensor_msgs/CompressedImage`
+  `sensor_msgs/CompressedImage` (IR/ToF verified end to end; RGB depends on the
+  OV8856, which is intermittently faulty on this unit - GetImageFrame blocks with
+  no frames = the MIPI/FPC issue, a cable-reseat matter, not software)
 
 Planned next:
 - `/imu`, `/battery`, `/bumper`, `/cliff`, `/dock` (+ raw dock-IR), motor currents
@@ -42,32 +44,43 @@ publisher, so the ROS 2 side is identical:
   read-only serial mirror over TCP instead. Lets you develop against live
   telemetry while `ava` keeps the robot safe.
 
-Cameras come from go2rtc MJPEG (`/api/stream.mjpeg?src=camera[_ir]`), fed by the
-no-ava `w10-cam` stack (ava off) or `ava`'s relay (ava on) - wrapped as
-`CompressedImage`, no decode.
+## Cameras
 
-## Full autonomy, ava OFF (one binary, one script)
+The vendored helper `w10-camd` (`cam-helper/`) drives the cameras via the vendor
+`libsunxicamera.so` (RGB OV8856 /dev/video2 NV21; IR/ToF ofilm0092 /dev/video1,
+whose media-controller pipeline it sets up), JPEG-encodes each frame, and serves
+MJPEG on loopback (:8090 RGB, :8091 IR). `ros2dreame` reads that and republishes
+as `sensor_msgs/CompressedImage`. No `go2rtc`, no `ava_cam_relay`, no shm.
+
+Why a separate helper (not folded into ros2dreame): driving the camera needs the
+vendor `.so`, which must be `dlopen`'d - and a fully static musl binary has no
+dynamic loader, so it can't. `w10-camd` is therefore a small DYNAMIC binary (only
+`<= GLIBC_2.17` symbols, so it loads on the robot's glibc 2.23); ros2dreame stays
+static. The one irreducible runtime dependency is `/usr/lib/libsunxicamera.so`
+(the Allwinner ISP driver, part of the robot OS) - not vendorable, only dlopen'd.
+
+Image topics use **reliable** QoS: a JPEG is many KB (multiple RTPS fragments),
+and over best-effort WiFi one lost fragment drops the whole frame.
+
+## Full autonomy, ava OFF (one static binary + one dynamic helper, one script)
 
 `deploy/direct-mode.sh` (run on the robot) freezes both ava watchdogs, kills ava
-(freeing `ttyS4`/`ttyS3`), brings up the camera stack, and starts `ros2dreame` -
-which then drives the MCU/LDS itself:
+(freeing `ttyS4`/`ttyS3` + the cameras), and starts `w10-camd` + `ros2dreame`:
 
 ```sh
-deploy/direct-mode.sh start [rgb|tof|both]   # ava off (default both)
-deploy/direct-mode.sh restore                # ava back
+deploy/direct-mode.sh start      # ava off, full stack up
+deploy/direct-mode.sh restore    # ava back
 ```
 
-(The camera stack `w10-cam`/`noava-cam.sh` lives in the separate
-`dreame-vacuum-livestream` project and needs the vendor `libsunxicamera.so`; it
-is a runtime dependency, not part of this repo.)
+## Vendored (self-contained)
 
-## Vendored
-
-`dreame-proto/` - the Dreame MCU/LDS protocol (pure `no_std`, no deps): framing,
-decode (`Status20ms/10ms/100ms`, `Triggers`, `Battery`) + encode (`MotorCtrl`,
-`SetCleaning`, `SetLED`). Copied from `VacuumTiger/dreame-w10/proto`; the direct
-driver (`src/direct.rs`) is ported from `VacuumTiger/dreame-w10/mcud`. Re-copy
-`dreame-proto/src/*` to resync the protocol.
+- `dreame-proto/` - the Dreame MCU/LDS protocol (pure `no_std`, no deps): framing,
+  decode (`Status20ms/10ms/100ms`, `Triggers`, `Battery`) + encode (`MotorCtrl`,
+  `SetCleaning`, `SetLED`). From `VacuumTiger/dreame-w10/proto`; the direct driver
+  (`src/direct.rs`) is ported from `VacuumTiger/dreame-w10/mcud`.
+- `cam-helper/` - `w10-camd.c` (camera driver + JPEG + MJPEG server, merged from
+  `w10-cam` + `ava_cam_relay`) plus `ir_process.h`/`jpeg_gray.h`. `make docker`
+  cross-builds it for the robot (dynamic aarch64).
 
 ## Build
 
@@ -76,7 +89,8 @@ bundled `rust-lld` cross-linker (see the note in `build/build-aarch64.sh`):
 
 ```sh
 rustup target add aarch64-unknown-linux-musl   # one-time
-./build/build-aarch64.sh
+./build/build-aarch64.sh                        # -> ros2dreame (static musl)
+( cd cam-helper && make docker )                # -> w10-camd (dynamic aarch64)
 ```
 
 Produces one fully static `ELF aarch64` (`ldd` -> "not a dynamic executable"):

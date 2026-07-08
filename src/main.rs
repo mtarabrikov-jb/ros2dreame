@@ -48,6 +48,20 @@ fn tf_qos() -> QosPolicies {
         .build()
 }
 
+/// Camera images: reliable, keep-last 2. CompressedImage JPEGs are large (many
+/// KB -> multiple RTPS fragments); over best-effort WiFi a single lost fragment
+/// drops the whole sample, so reliable (fragment retransmit) is needed to get
+/// complete frames through. Keep-last 2 bounds latency if the reader lags.
+fn image_qos() -> QosPolicies {
+    QosPolicyBuilder::new()
+        .reliability(policy::Reliability::Reliable {
+            max_blocking_time: Duration::from_millis(200),
+        })
+        .history(policy::History::KeepLast { depth: 2 })
+        .durability(policy::Durability::Volatile)
+        .build()
+}
+
 /// /tf_static: reliable, transient-local (late subscribers still get it).
 fn tf_static_qos() -> QosPolicies {
     QosPolicyBuilder::new()
@@ -105,17 +119,17 @@ fn main() {
         Some(direct::run(&mcu, &lds, tx.clone()))
     };
 
-    // Cameras: read MJPEG from go2rtc (fed by the vendor ava stack OR the no-ava
-    // w10-cam stack). "camera" always; "camera_ir" when W10_CAM_IR is set (the
-    // no-ava dual-camera stack publishes both). frame_id routes to its topic.
-    let cam_addr = std::env::var("W10_CAM_ADDR").unwrap_or_else(|_| "127.0.0.1:1984".into());
-    let mut cams: Vec<(&str, &str)> = vec![("camera", "camera")]; // (go2rtc src, frame_id)
+    // Cameras: read MJPEG from the vendored w10-camd helper over loopback (no
+    // go2rtc), publish as CompressedImage. "camera" (:8090) always; "camera_ir"
+    // (:8091) when the helper also runs ToF (W10_CAM_IR). frame_id routes topic.
+    let cam_host = std::env::var("W10_CAM_ADDR").unwrap_or_else(|_| "127.0.0.1".into());
+    let mut cams: Vec<(&str, u16)> = vec![("camera", 8090)];
     if std::env::var("W10_CAM_IR").is_ok() {
-        cams.push(("camera_ir", "camera_ir"));
+        cams.push(("camera_ir", 8091));
     }
-    for (src, frame) in &cams {
-        let (a, s, f, txc) = (cam_addr.clone(), src.to_string(), frame.to_string(), tx.clone());
-        thread::spawn(move || cam::cam_reader(a, s, f, txc));
+    for (frame, port) in &cams {
+        let (a, f, txc) = (format!("{cam_host}:{port}"), frame.to_string(), tx.clone());
+        thread::spawn(move || cam::cam_reader(a, f, txc));
     }
     drop(tx);
 
@@ -171,12 +185,12 @@ fn main() {
 
     // Camera publishers: /<frame>/image_raw/compressed (image_transport compressed).
     let mut img_pubs: Vec<(String, ros2_client::Publisher<msg::CompressedImage>)> = Vec::new();
-    for (_src, frame) in &cams {
+    for (frame, _port) in &cams {
         let topic = node
             .create_topic(
                 &Name::new(&format!("/{frame}/image_raw"), "compressed").unwrap(),
                 MessageTypeName::new("sensor_msgs", "CompressedImage"),
-                &sensor_qos(),
+                &image_qos(),
             )
             .expect("image topic");
         let p = node
@@ -201,10 +215,8 @@ fn main() {
         log::warn!("tf_static publish: {e:?}");
     }
 
-    let cam_names: Vec<&str> = cams.iter().map(|(_, f)| *f).collect();
-    log::info!(
-        "ros2dreame up; publishing /scan /odom /tf /tf_static + cameras {cam_names:?}"
-    );
+    let cam_names: Vec<&str> = cams.iter().map(|(f, _)| *f).collect();
+    log::info!("ros2dreame up; publishing /scan /odom /tf /tf_static + cameras {cam_names:?}");
 
     let (mut n_scan, mut n_odom, mut n_img) = (0u64, 0u64, 0u64);
     for m in rx {
