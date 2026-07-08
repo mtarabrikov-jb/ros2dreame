@@ -100,7 +100,7 @@ fn main() {
     // drive the MCU/LDS in-process (one binary, no external daemon). Set
     // W10_MCU_ADDR (host:port) to use TAP mode instead (ava ON, read
     // avatap-relay's mirror over TCP) for development.
-    let _drive = if let Ok(mcu_addr) = std::env::var("W10_MCU_ADDR") {
+    let drive = if let Ok(mcu_addr) = std::env::var("W10_MCU_ADDR") {
         let lds_addr = std::env::var("W10_LDS_ADDR").unwrap_or_else(|_| "127.0.0.1:7702".into());
         log::info!("data source: TAP (mcu {mcu_addr}, lds {lds_addr})");
         {
@@ -200,6 +200,37 @@ fn main() {
             .create_publisher::<msg::CompressedImage>(&topic, None)
             .expect("image pub");
         img_pubs.push((frame.to_string(), p));
+    }
+
+    // /cmd_vel teleop -> drive (direct mode only). The drive path in direct.rs is
+    // gated by a 500 ms command watchdog + speed clamp + cliff/bumper hazard, so
+    // a dropped/stale command stops the robot. Best-effort sub matches most
+    // teleop/nav publishers; the watchdog covers any loss.
+    if let Some(drive) = drive.clone() {
+        let cmd_topic = node
+            .create_topic(
+                &Name::new("/", "cmd_vel").unwrap(),
+                MessageTypeName::new("geometry_msgs", "Twist"),
+                &sensor_qos(),
+            )
+            .expect("cmd_vel topic");
+        let sub = node
+            .create_subscription::<msg::Twist>(&cmd_topic, Some(sensor_qos()))
+            .expect("cmd_vel sub");
+        thread::spawn(move || {
+            log::info!("cmd_vel: subscribed (Twist -> MotorCtrl)");
+            loop {
+                match sub.take() {
+                    Ok(Some((t, _))) => {
+                        let lin_mm_s = (t.linear.x * 1000.0) as f32; // m/s -> mm/s
+                        let rot = t.angular.z as f32; // rad/s
+                        log::info!("cmd_vel: lin={lin_mm_s:.0} mm/s ang={rot:.2} rad/s");
+                        drive.set_drive(lin_mm_s, rot);
+                    }
+                    _ => thread::sleep(std::time::Duration::from_millis(10)),
+                }
+            }
+        });
     }
 
     // Static base_link -> laser, published once (transient-local keeps it for
