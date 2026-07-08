@@ -1,0 +1,32 @@
+[package]
+name = "ros2dreame"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone ROS 2 bridge for the Dreame Bot W10 (r2104): sensors, actuators and cameras as standard ROS 2 topics, in one static Rust binary."
+license = "MIT"
+authors = ["ros2dreame"]
+
+[workspace]
+members = ["dreame-proto"]
+
+[dependencies]
+# Shared Dreame MCU/LDS protocol (vendored, no_std, no deps).
+dreame-w10-proto = { path = "dreame-proto" }
+
+# Pure-Rust ROS 2 client (RustDDS underneath: no rcl/rmw, no C DDS, no ROS 2
+# install). This is what lets the whole thing be one static musl binary.
+ros2-client = "0.10"
+serde = { version = "1", features = ["derive"] }
+
+# ros2-client is async; smol is the light executor used for its streams.
+smol = "2"
+futures = "0.3"
+
+log = "0.4"
+env_logger = "0.11"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

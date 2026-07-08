@@ -1,0 +1,13 @@
+[package]
+name = "dreame-w10-proto"
+version = "0.1.0"
+edition = "2021"
+description = "Dreame W10 MCU (ttyS4) framed binary protocol: parsing and command encoding."
+license = "MIT"
+
+# Vendored into ros2dreame from VacuumTiger/dreame-w10/proto (pure no_std parsing,
+# no external deps). Kept as a local crate so ros2dreame is a self-contained repo.
+# Provenance and sync notes: see ../README.md.
+
+[lib]
+name = "dreame_w10_proto"
