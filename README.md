@@ -17,10 +17,11 @@ Working, ava OFF, one binary (verified on the robot -> a Jazzy container):
 - `/scan` `sensor_msgs/LaserScan` - LDS arc (W10 is a ~126 deg rear arc, not 360)
 - `/odom` `nav_msgs/Odometry` + `/tf` (`odom -> base_link`) + `/tf_static`
   (`base_link -> laser`)
-- `/camera/image_raw/compressed`, `/camera_ir/image_raw/compressed`
-  `sensor_msgs/CompressedImage` (IR/ToF verified end to end; RGB depends on the
-  OV8856, which is intermittently faulty on this unit - GetImageFrame blocks with
-  no frames = the MIPI/FPC issue, a cable-reseat matter, not software)
+- `/camera/image_raw/compressed` (RGB), `/camera_ir/image_raw/compressed` (IR)
+  `sensor_msgs/CompressedImage`. Both verified end to end. RGB and the driving
+  telemetry are **mutually exclusive** in the robot's firmware: the OV8856 RGB
+  camera only streams when the robot is idle/parked, so RGB comes from **observe
+  mode** while `/scan` + `/odom` + IR come from **nav mode** (see [docs/MCU.md](docs/MCU.md)).
 
 Planned next:
 - `/imu`, `/battery`, `/bumper`, `/cliff`, `/dock` (+ raw dock-IR), motor currents
@@ -68,9 +69,13 @@ and over best-effort WiFi one lost fragment drops the whole frame.
 (freeing `ttyS4`/`ttyS3` + the cameras), and starts `w10-camd` + `ros2dreame`:
 
 ```sh
-deploy/direct-mode.sh start      # ava off, full stack up
+deploy/direct-mode.sh start      # nav mode: /scan /odom /tf + IR camera
+deploy/direct-mode.sh observe    # park mode: RGB camera (idle; no /scan /odom)
 deploy/direct-mode.sh restore    # ava back
 ```
+
+`start` (nav) and `observe` (park) are mutually exclusive because the firmware
+only streams the RGB camera when the robot is idle - see [docs/MCU.md](docs/MCU.md).
 
 ## Vendored (self-contained)
 

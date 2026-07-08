@@ -27,8 +27,13 @@ freeze() { for p in $(sysmon) $(mon); do kill -STOP "$p" 2>/dev/null; done; }
 resume() { for p in $(sysmon) $(mon); do kill -CONT "$p" 2>/dev/null; done; }
 
 case "${1:-status}" in
-    start)
+    start|observe)
+        # start  = nav mode: drive MCU, spin lidar -> /scan /odom + IR camera.
+        #          RGB is dead (vendor firmware kills OV8856 in any active mode).
+        # observe = park mode: idle MCU (no drive/nav, turret off) -> RGB camera
+        #          + /odom, no /scan. The only state where the OV8856 streams.
         [ -x "$R2D" ] || { echo "ERROR: $R2D missing (deploy first)"; exit 1; }
+        OBS=""; [ "$1" = observe ] && OBS="W10_OBSERVE=1"
         echo ">> stop any prior stack, freeze ava watchdogs, kill relay + ava"
         killall ros2dreame w10-camd avatap-relay ava_cam_relay w10-cam go2rtc 2>/dev/null
         freeze
@@ -44,11 +49,15 @@ case "${1:-status}" in
         else
             echo "   (no w10-camd at $CAMD; cameras skipped)"
         fi
-        echo ">> start ros2dreame (drives MCU/LDS; reads camera helper)"
-        setsid env RUST_LOG=info $IR "$R2D" >/data/log/ros2dreame.log 2>&1 </dev/null &
+        echo ">> start ros2dreame ($1)"
+        setsid env RUST_LOG=info $OBS $IR "$R2D" >/data/log/ros2dreame.log 2>&1 </dev/null &
         sleep 3
         if pidof ros2dreame >/dev/null; then
-            echo ">> UP (ava OFF). /scan /odom /tf /camera(_ir). Restore: direct-mode.sh restore"
+            if [ "$1" = observe ]; then
+                echo ">> UP (ava OFF, OBSERVE). /odom /tf /camera (RGB), no /scan. Restore: direct-mode.sh restore"
+            else
+                echo ">> UP (ava OFF, nav). /scan /odom /tf /camera_ir. Restore: direct-mode.sh restore"
+            fi
         else
             echo ">> WARN: ros2dreame not up"; tail -8 /data/log/ros2dreame.log
         fi
@@ -68,5 +77,5 @@ case "${1:-status}" in
             echo -n "$p : "; pidof "$p" || echo none
         done
         ;;
-    *) echo "usage: direct-mode.sh start | restore | status"; exit 1 ;;
+    *) echo "usage: direct-mode.sh start | observe | restore | status"; exit 1 ;;
 esac

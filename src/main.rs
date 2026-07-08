@@ -115,8 +115,11 @@ fn main() {
     } else {
         let mcu = std::env::var("W10_MCU").unwrap_or_else(|_| "/dev/ttyS4".into());
         let lds = std::env::var("W10_LDS").unwrap_or_else(|_| "/dev/ttyS3".into());
-        log::info!("data source: DIRECT (ava off; mcu {mcu}, lds {lds})");
-        Some(direct::run(&mcu, &lds, tx.clone()))
+        // Observe/park mode (W10_OBSERVE): stay idle so the RGB camera can stream
+        // (firmware kills RGB in any active/nav mode); no /scan. Default is nav.
+        let observe = std::env::var("W10_OBSERVE").is_ok();
+        log::info!("data source: DIRECT (ava off; mcu {mcu}, lds {lds}, observe={observe})");
+        Some(direct::run(&mcu, &lds, observe, tx.clone()))
     };
 
     // Cameras: read MJPEG from the vendored w10-camd helper over loopback (no

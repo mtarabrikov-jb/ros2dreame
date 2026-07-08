@@ -36,6 +36,12 @@ pub struct Shared {
     shutdown: AtomicBool,
     hazard: AtomicBool,
     lidar_on: AtomicBool,
+    // observe mode: stop driving the MCU (no MotorCtrl, no nav frames, turret
+    // off) so the robot stays "idle/docked" - the only state in which the
+    // vendor firmware lets the OV8856 RGB camera stream (see REVERSE_ENGINEERING;
+    // RGB is dead in any active/nav mode). Keeps SetLED/SetCleaning heartbeats +
+    // pong so telemetry (odom/imu) still flows; loses /scan (turret parked).
+    observe: AtomicBool,
     // drive command (for a future /cmd_vel), gated by watchdog + clamp + hazard
     enabled: AtomicBool,
     linear_bits: AtomicU32,
@@ -142,6 +148,29 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
     let mut tick: u64 = 0;
     let mut mbuf = [0u8; 64];
     while !sh.shutdown.load(Ordering::Relaxed) {
+        let observe = sh.observe.load(Ordering::Relaxed);
+        // SetLED / SetCleaning idle: harmless heartbeats ava always sends; keep
+        // them in both modes so the MCU stays alive and streams telemetry.
+        if tick % 25 == 5 {
+            send(&w, 0x02, &[0x21]); // SetLED / heartbeat
+        }
+        if tick % 50 == 10 {
+            send(&w, 0x01, &[0x00, 0x01, 0x00, 0x00, 0x00, 0x00]); // SetCleaning idle
+        }
+        if observe {
+            // Idle/parked: a zero MotorCtrl keeps the MCU streaming telemetry
+            // (odom/imu), but NO nav frames and turret off -> not an active/nav
+            // mode, so the RGB camera can stream. (If a zero MotorCtrl still
+            // trips active mode and kills RGB, drop this send.)
+            if let Some(n) = encode_motor_ctrl(1, 0.0, 0.0, &mut mbuf) {
+                if let Ok(mut f) = w.lock() {
+                    let _ = f.write_all(&mbuf[..n]);
+                }
+            }
+            tick = tick.wrapping_add(1);
+            thread::sleep(Duration::from_millis(20));
+            continue;
+        }
         let fresh =
             sh.now_ms().wrapping_sub(sh.last_cmd_ms.load(Ordering::Relaxed)) < WATCHDOG_MS;
         let (mut lin, rot) = if sh.enabled.load(Ordering::Relaxed) && fresh {
@@ -161,12 +190,6 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
             }
         }
         let lidar = sh.lidar_on.load(Ordering::Relaxed);
-        if tick % 25 == 5 {
-            send(&w, 0x02, &[0x21]); // SetLED / heartbeat
-        }
-        if tick % 50 == 10 {
-            send(&w, 0x01, &[0x00, 0x01, 0x00, 0x00, 0x00, 0x00]); // SetCleaning idle
-        }
         if tick % 50 == 20 {
             send(&w, 0x14, if lidar { &[0x04, 0x01] } else { &[0x04, 0x00] });
         }
@@ -220,12 +243,13 @@ fn lds_loop(mut rd: File, sh: Arc<Shared>, tx: Sender<Tap>) {
 /// Open the serial ports and start the driver threads. Returns the shared state
 /// (turret already enabled; drive disabled until `/cmd_vel`). Exits the process
 /// if the MCU port can't be opened (ava still running?).
-pub fn run(mcu_path: &str, lds_path: &str, tx: Sender<Tap>) -> Arc<Shared> {
+pub fn run(mcu_path: &str, lds_path: &str, observe: bool, tx: Sender<Tap>) -> Arc<Shared> {
     let sh = Arc::new(Shared {
         start: Instant::now(),
         shutdown: AtomicBool::new(false),
         hazard: AtomicBool::new(false),
-        lidar_on: AtomicBool::new(true), // spin the turret so /scan has data
+        lidar_on: AtomicBool::new(!observe), // turret spins for /scan in nav mode only
+        observe: AtomicBool::new(observe),
         enabled: AtomicBool::new(false),
         linear_bits: AtomicU32::new(0),
         rot_bits: AtomicU32::new(0),
@@ -241,7 +265,11 @@ pub fn run(mcu_path: &str, lds_path: &str, tx: Sender<Tap>) -> Arc<Shared> {
     };
     let wr = rd.try_clone().expect("clone MCU fd");
     let w = Arc::new(Mutex::new(wr));
-    log::info!("direct: driving MCU {mcu_path} (MotorCtrl 50Hz + pong + heartbeats), turret on");
+    if observe {
+        log::info!("direct: MCU {mcu_path} OBSERVE mode (idle heartbeats only, turret off; RGB can stream, no /scan)");
+    } else {
+        log::info!("direct: driving MCU {mcu_path} (MotorCtrl 50Hz + pong + heartbeats), turret on");
+    }
 
     {
         let (w, sh, tx) = (w.clone(), sh.clone(), tx.clone());
