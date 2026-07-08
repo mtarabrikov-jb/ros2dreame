@@ -25,6 +25,7 @@ use crate::msg::{
 pub enum Tap {
     Odom(Box<Odometry>),
     Scan(Box<LaserScan>),
+    Image(Box<crate::msg::CompressedImage>),
 }
 
 // --- LDS -> LaserScan geometry (W10) -----------------------------------------

@@ -7,7 +7,7 @@ license = "MIT"
 authors = ["ros2dreame"]
 
 [workspace]
-members = ["dreame-proto"]
+members = ["dreame-proto", "w10-mcud"]
 
 [dependencies]
 # Shared Dreame MCU/LDS protocol (vendored, no_std, no deps).

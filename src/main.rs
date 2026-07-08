@@ -9,6 +9,7 @@
 //!   /tf_static  tf2_msgs/TFMessage  base_link -> laser (once, transient-local)
 //! With TF, rviz (Fixed Frame = odom) renders /scan and the odometry pose.
 
+mod cam;
 mod msg;
 mod tap;
 
@@ -86,7 +87,24 @@ fn main() {
         let tx = tx.clone();
         thread::spawn(move || tap::mcu_reader(mcu_addr, tx));
     }
-    thread::spawn(move || tap::lds_reader(lds_addr, tx));
+    {
+        let tx = tx.clone();
+        thread::spawn(move || tap::lds_reader(lds_addr, tx));
+    }
+
+    // Cameras: read MJPEG from go2rtc (fed by the vendor ava stack OR the no-ava
+    // w10-cam stack). "camera" always; "camera_ir" when W10_CAM_IR is set (the
+    // no-ava dual-camera stack publishes both). frame_id routes to its topic.
+    let cam_addr = std::env::var("W10_CAM_ADDR").unwrap_or_else(|_| "127.0.0.1:1984".into());
+    let mut cams: Vec<(&str, &str)> = vec![("camera", "camera")]; // (go2rtc src, frame_id)
+    if std::env::var("W10_CAM_IR").is_ok() {
+        cams.push(("camera_ir", "camera_ir"));
+    }
+    for (src, frame) in &cams {
+        let (a, s, f, txc) = (cam_addr.clone(), src.to_string(), frame.to_string(), tx.clone());
+        thread::spawn(move || cam::cam_reader(a, s, f, txc));
+    }
+    drop(tx);
 
     let context = Context::new().expect("create ROS 2 context");
     let mut node = context
@@ -138,6 +156,22 @@ fn main() {
         .create_publisher::<TFMessage>(&tf_static_topic, None)
         .expect("tf_static pub");
 
+    // Camera publishers: /<frame>/image_raw/compressed (image_transport compressed).
+    let mut img_pubs: Vec<(String, ros2_client::Publisher<msg::CompressedImage>)> = Vec::new();
+    for (_src, frame) in &cams {
+        let topic = node
+            .create_topic(
+                &Name::new(&format!("/{frame}/image_raw"), "compressed").unwrap(),
+                MessageTypeName::new("sensor_msgs", "CompressedImage"),
+                &sensor_qos(),
+            )
+            .expect("image topic");
+        let p = node
+            .create_publisher::<msg::CompressedImage>(&topic, None)
+            .expect("image pub");
+        img_pubs.push((frame.to_string(), p));
+    }
+
     // Static base_link -> laser, published once (transient-local keeps it for
     // late subscribers like rviz).
     let static_tf = TFMessage {
@@ -154,9 +188,12 @@ fn main() {
         log::warn!("tf_static publish: {e:?}");
     }
 
-    log::info!("ros2dreame up (tap mode); publishing /scan /odom /tf (+/tf_static base_link->laser)");
+    let cam_names: Vec<&str> = cams.iter().map(|(_, f)| *f).collect();
+    log::info!(
+        "ros2dreame up; publishing /scan /odom /tf /tf_static + cameras {cam_names:?}"
+    );
 
-    let (mut n_scan, mut n_odom) = (0u64, 0u64);
+    let (mut n_scan, mut n_odom, mut n_img) = (0u64, 0u64, 0u64);
     for m in rx {
         match m {
             Tap::Scan(s) => {
@@ -165,7 +202,7 @@ fn main() {
                 } else {
                     n_scan += 1;
                     if n_scan % 50 == 0 {
-                        log::info!("published {n_scan} scans, {n_odom} odom");
+                        log::info!("scans {n_scan}, odom {n_odom}, images {n_img}");
                     }
                 }
             }
@@ -174,6 +211,13 @@ fn main() {
                 let _ = odom_pub.publish(*o);
                 let _ = tf_pub.publish(tf);
                 n_odom += 1;
+            }
+            Tap::Image(img) => {
+                let fid = img.header.frame_id.clone();
+                if let Some((_, p)) = img_pubs.iter().find(|(f, _)| *f == fid) {
+                    let _ = p.publish(*img);
+                    n_img += 1;
+                }
             }
         }
     }

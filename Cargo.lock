@@ -1612,6 +1612,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "w10-mcud"
+version = "0.1.0"
+dependencies = [
+ "dreame-w10-proto",
+ "libc",
+]
+
+[[package]]
 name = "wasi"
 version = "0.11.1+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

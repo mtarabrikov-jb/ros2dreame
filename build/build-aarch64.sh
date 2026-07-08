@@ -20,8 +20,12 @@ LLD="$SR/lib/rustlib/$HOST/bin/rust-lld"
 
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C linker-flavor=ld.lld -C linker=$LLD -C link-self-contained=yes"
 
-cargo build --release --target aarch64-unknown-linux-musl "$@"
+# Whole workspace: the ROS 2 bridge (ros2dreame) AND the MCU driver (w10-mcud),
+# so the "ava off" stack builds entirely from this repo.
+cargo build --release --workspace --target aarch64-unknown-linux-musl "$@"
 
-BIN=target/aarch64-unknown-linux-musl/release/ros2dreame
-echo ">> built $BIN"
-file "$BIN" 2>/dev/null || true
+D=target/aarch64-unknown-linux-musl/release
+for b in ros2dreame w10-mcud; do
+    echo ">> built $D/$b"
+    file "$D/$b" 2>/dev/null || true
+done

@@ -37,6 +37,14 @@ pub struct LaserScan {
     pub intensities: Vec<f32>,
 }
 
+/// sensor_msgs/CompressedImage
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct CompressedImage {
+    pub header: Header,
+    pub format: String, // "jpeg"
+    pub data: Vec<u8>,
+}
+
 // --- geometry_msgs ---
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

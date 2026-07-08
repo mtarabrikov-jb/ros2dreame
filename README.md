@@ -32,23 +32,49 @@ Subscribed (direct mode):
 - `/cmd_vel` `geometry_msgs/Twist` -> `MotorCtrl`
 - services: suction / brushes / water pump / LED / LDS motor
 
-## Data sources (two modes, mirroring the SangamIO dreame_w10 driver)
+## Data source: TCP relay (same wire in both modes)
 
-- **tap** (read-only, coexists with the vendor `ava`): connect to `avatap-relay`
-  TCP channels `mcu-rx` (7701), `lds-rx` (7702). Publishes sensors + cameras.
-- **direct** (replaces `ava`): open `/dev/ttyS4` (MCU) + `/dev/ttyS3` (LDS),
-  run the control loop, and actuate from `/cmd_vel` + services.
+`ros2dreame` reads the raw framed MCU + LDS streams over TCP - `mcu-rx` (7701),
+`lds-rx` (7702) - and decodes them with `dreame-proto`. What feeds those ports
+decides whether `ava` is on or off:
 
-Cameras come from the existing `ava_cam_relay` MJPEG (`:8090` RGB, `:8091` IR/ToF)
-wrapped as `CompressedImage` - no robot-side change to the camera stack.
+- **ava OFF (full autonomy, the goal):** the vendored **`w10-mcud`** opens
+  `/dev/ttyS4` + `/dev/ttyS3` itself, sustains the MCU (MotorCtrl 50Hz +
+  heartbeats + ping/pong, own watchdog/clamp/cliff-gate), and serves 7701/7702
+  (+ control 7705). No vendor daemon, no SangamIO.
+- **ava ON (development tap):** `avatap-relay` mirrors `ava`'s serial I/O
+  read-only onto the same 7701/7702. Lets you develop against live telemetry
+  while `ava` keeps the robot safe.
 
-## Vendored protocol
+Either way `ros2dreame` is unchanged. Cameras come from go2rtc MJPEG
+(`/api/stream.mjpeg?src=camera[_ir]`), fed by the no-ava `w10-cam` stack (ava
+off) or `ava`'s own relay (ava on) - wrapped as `CompressedImage`, no decode.
 
-`dreame-proto/` is a copy of `VacuumTiger/dreame-w10/proto` (pure `no_std`, no
-deps, MIT) - the Dreame MCU/LDS framing, decode (`Status20ms/10ms/100ms`,
-`Triggers`, `Battery`) and command encode (`MotorCtrl`, `SetCleaning`, `SetLED`).
-It is shared, not part of SangamIO. If the upstream protocol changes, re-copy the
-two files under `dreame-proto/src/`.
+## Full autonomy, ava OFF
+
+Everything below builds from THIS repo. `deploy/direct-mode.sh` (run on the
+robot) freezes both ava watchdogs, kills ava, starts `w10-mcud` + the camera
+stack + `ros2dreame`, and enables the LDS turret:
+
+```sh
+deploy/direct-mode.sh start [rgb|tof|both]   # ava off, full stack up
+deploy/direct-mode.sh restore                # ava back
+```
+
+(The camera stack `w10-cam`/`noava-cam.sh` lives in the separate
+`dreame-vacuum-livestream` project and needs the vendor `libsunxicamera.so`; it
+is a runtime dependency, not vendored here.)
+
+## Vendored (self-contained)
+
+- `dreame-proto/` - the Dreame MCU/LDS protocol (pure `no_std`, no deps): framing,
+  decode (`Status20ms/10ms/100ms`, `Triggers`, `Battery`) + encode (`MotorCtrl`,
+  `SetCleaning`, `SetLED`). Copied from `VacuumTiger/dreame-w10/proto`.
+- `w10-mcud/` - the standalone MCU driver (deps: `libc` + `dreame-proto`). Copied
+  from `VacuumTiger/dreame-w10/mcud` (branch `dreame_w10_control`).
+
+Both are plain copies so this repo builds the whole ava-off stack on its own. To
+resync, re-copy the sources from upstream.
 
 ## Build
 
@@ -60,9 +86,10 @@ rustup target add aarch64-unknown-linux-musl   # one-time
 ./build/build-aarch64.sh
 ```
 
-Produces `target/aarch64-unknown-linux-musl/release/ros2dreame` - a fully static
-`ELF aarch64` (`ldd` -> "not a dynamic executable"). Deploy with `cat over ssh`
-(the robot has no sftp-server): `cat ros2dreame | ssh root@<ip> 'cat > /data/ros2dreame/ros2dreame && chmod +x $_'`.
+Builds the whole workspace - `ros2dreame` AND `w10-mcud` - as fully static
+`ELF aarch64` (`ldd` -> "not a dynamic executable") under
+`target/aarch64-unknown-linux-musl/release/`. Deploy both with `cat over ssh`
+(the robot has no sftp-server), e.g. `cat ros2dreame | ssh root@<ip> 'cat > /data/ros2dreame/ros2dreame && chmod +x $_'` (and likewise `w10-mcud` + `deploy/direct-mode.sh`).
 
 Native (fast API checks on the dev host): `cargo build`.
 
