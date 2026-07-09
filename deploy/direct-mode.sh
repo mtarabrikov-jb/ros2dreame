@@ -114,6 +114,27 @@ case "${1:-status}" in
             echo ">> WARN: ros2dreame not up"; tail -8 /data/log/ros2dreame.log
         fi
         ;;
+    auto)
+        # Auto mode: ros2dreame switches turret + cameras with motion. Driving
+        # (fresh /cmd_vel) -> turret on -> /scan + IR; idle -> turret off, RGB
+        # un-wedge reset (0x1d 05 00), both cameras (RGB + IR). ros2dreame OWNS the
+        # w10-camd helper here (starts/stops tof<->both), so we do NOT start it -
+        # W10_CAMD just tells ros2dreame where the helper binary is.
+        [ -x "$R2D" ] || { echo "ERROR: $R2D missing (deploy first)"; exit 1; }
+        echo ">> stop any prior stack, force ava OFF (freeze reboot+respawn watchdogs)"
+        killall ros2dreame w10-camd avatap-relay ava_cam_relay w10-cam go2rtc 2>/dev/null
+        ava_off
+        sleep 1
+        mkdir -p /data/log
+        echo ">> start ros2dreame (auto; owns w10-camd)"
+        setsid env RUST_LOG=info W10_AUTO=1 W10_CAMD="$CAMD" "$R2D" >/data/log/ros2dreame.log 2>&1 </dev/null &
+        sleep 3
+        if pidof ros2dreame >/dev/null; then
+            echo ">> UP (ava OFF, AUTO). drive -> /scan + IR; stop -> /camera (RGB) + /camera_ir. Restore: direct-mode.sh restore"
+        else
+            echo ">> WARN: ros2dreame not up"; tail -8 /data/log/ros2dreame.log
+        fi
+        ;;
     restore)
         echo ">> stop ros2dreame + camera helper, restore real ava, resume watchdogs"
         killall ros2dreame w10-camd 2>/dev/null
@@ -128,5 +149,5 @@ case "${1:-status}" in
             echo -n "$p : "; pidof "$p" || echo none
         done
         ;;
-    *) echo "usage: direct-mode.sh start | observe | restore | status"; exit 1 ;;
+    *) echo "usage: direct-mode.sh start | observe | auto | restore | status"; exit 1 ;;
 esac

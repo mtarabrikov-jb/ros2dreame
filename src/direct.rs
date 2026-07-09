@@ -47,6 +47,11 @@ pub struct Shared {
     linear_bits: AtomicU32,
     rot_bits: AtomicU32,
     last_cmd_ms: AtomicU64,
+    // last time a NON-zero drive command arrived - the auto mode (W10_AUTO) parks
+    // (turret off -> RGB+IR) after this goes stale and drives (turret on -> /scan+IR)
+    // while it is fresh. Distinct from last_cmd_ms (the drive watchdog), which a
+    // zero "stop" command still refreshes.
+    last_move_ms: AtomicU64,
     // actuator levels (0..~150), sent in the periodic SetCleaning frame.
     side_brush: AtomicU8,
     main_brush: AtomicU8,
@@ -62,8 +67,30 @@ impl Shared {
     pub fn set_drive(&self, linear_mm_s: f32, rot_rad_s: f32) {
         self.linear_bits.store(linear_mm_s.to_bits(), Ordering::Relaxed);
         self.rot_bits.store(rot_rad_s.to_bits(), Ordering::Relaxed);
-        self.last_cmd_ms.store(self.now_ms(), Ordering::Relaxed);
+        let now = self.now_ms();
+        self.last_cmd_ms.store(now, Ordering::Relaxed);
+        if linear_mm_s != 0.0 || rot_rad_s != 0.0 {
+            self.last_move_ms.store(now, Ordering::Relaxed);
+        }
         self.enabled.store(true, Ordering::Relaxed);
+    }
+    /// ms since the last non-zero drive command (auto mode's drive/park decision).
+    /// Returns u64::MAX before the first motion command so we start/stay PARKED.
+    pub fn idle_move_ms(&self) -> u64 {
+        let last = self.last_move_ms.load(Ordering::Relaxed);
+        if last == 0 {
+            return u64::MAX;
+        }
+        self.now_ms().saturating_sub(last)
+    }
+    pub fn is_parked(&self) -> bool {
+        self.observe.load(Ordering::Relaxed)
+    }
+    /// Auto mode: park (turret OFF -> RGB reset+capture) vs drive (turret ON ->
+    /// /scan). Flips both `observe` (tx_loop path) and `lidar_on` (turret) together.
+    pub fn set_parked(&self, parked: bool) {
+        self.observe.store(parked, Ordering::Relaxed);
+        self.lidar_on.store(!parked, Ordering::Relaxed);
     }
     pub fn set_side_brush(&self, v: u8) {
         self.side_brush.store(v, Ordering::Relaxed);
@@ -321,6 +348,7 @@ pub fn run(mcu_path: &str, lds_path: &str, observe: bool, tx: Sender<Tap>) -> Ar
         lidar_on: AtomicBool::new(!observe && std::env::var_os("W10_NO_TURRET").is_none()),
         observe: AtomicBool::new(observe),
         enabled: AtomicBool::new(false),
+        last_move_ms: AtomicU64::new(0),
         linear_bits: AtomicU32::new(0),
         rot_bits: AtomicU32::new(0),
         last_cmd_ms: AtomicU64::new(0),

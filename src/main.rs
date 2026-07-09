@@ -96,6 +96,11 @@ fn main() {
 
     let (tx, rx) = std::sync::mpsc::channel::<Tap>();
 
+    // W10_AUTO: auto-switch turret + cameras with motion. Driving (fresh /cmd_vel)
+    // -> turret ON -> /scan + IR; idle -> turret OFF, RGB un-wedge reset, both
+    // cameras (RGB + IR). ros2dreame owns the w10-camd helper in this mode.
+    let auto = std::env::var_os("W10_AUTO").is_some();
+
     // Data source. Default: DIRECT (ava OFF) - open /dev/ttyS4 + /dev/ttyS3 and
     // drive the MCU/LDS in-process (one binary, no external daemon). Set
     // W10_MCU_ADDR (host:port) to use TAP mode instead (ava ON, read
@@ -117,8 +122,8 @@ fn main() {
         let lds = std::env::var("W10_LDS").unwrap_or_else(|_| "/dev/ttyS3".into());
         // Observe/park mode (W10_OBSERVE): stay idle so the RGB camera can stream
         // (firmware kills RGB in any active/nav mode); no /scan. Default is nav.
-        let observe = std::env::var("W10_OBSERVE").is_ok();
-        log::info!("data source: DIRECT (ava off; mcu {mcu}, lds {lds}, observe={observe})");
+        let observe = auto || std::env::var("W10_OBSERVE").is_ok(); // auto starts parked
+        log::info!("data source: DIRECT (ava off; mcu {mcu}, lds {lds}, observe={observe}, auto={auto})");
         Some(direct::run(&mcu, &lds, observe, tx.clone()))
     };
 
@@ -129,7 +134,7 @@ fn main() {
     let rgb_shm = std::env::var("W10_CAM_SHM").unwrap_or_else(|_| "/tmp/ros2cam.shm".into());
     let ir_shm = std::env::var("W10_CAM_SHM_IR").unwrap_or_else(|_| "/tmp/ros2cam_ir.shm".into());
     let mut cams: Vec<(&str, String)> = vec![("camera", rgb_shm)];
-    if std::env::var("W10_CAM_IR").is_ok() {
+    if auto || std::env::var("W10_CAM_IR").is_ok() {
         cams.push(("camera_ir", ir_shm));
     }
     for (frame, path) in &cams {
@@ -137,6 +142,32 @@ fn main() {
         thread::spawn(move || cam::cam_reader(p, f, txc));
     }
     drop(tx);
+
+    // Auto mode: one thread flips turret/park with motion; another runs the
+    // w10-camd helper to match (tof while driving, both while parked).
+    if auto {
+        if let Some(sh) = drive.clone() {
+            let s = sh.clone();
+            thread::spawn(move || {
+                const HOLD_MS: u64 = 3000; // stay in DRIVING this long after motion stops
+                let mut parked = s.is_parked();
+                loop {
+                    let want = s.idle_move_ms() > HOLD_MS;
+                    if want != parked {
+                        s.set_parked(want);
+                        parked = want;
+                        log::info!("auto: {}", if want { "PARKED (turret off; RGB+IR)" } else { "DRIVING (turret on; /scan+IR)" });
+                    }
+                    thread::sleep(std::time::Duration::from_millis(400));
+                }
+            });
+            let s = sh.clone();
+            let camd = std::env::var("W10_CAMD").unwrap_or_else(|_| "/data/ros2dreame/w10-camd".into());
+            thread::spawn(move || camera_manager(s, camd));
+        } else {
+            log::warn!("W10_AUTO ignored: only works in DIRECT mode (no W10_MCU_ADDR)");
+        }
+    }
 
     let context = Context::new().expect("create ROS 2 context");
     let mut node = context
@@ -352,5 +383,58 @@ fn main() {
                 let _ = currents_pub.publish(*c);
             }
         }
+    }
+}
+
+/// Auto mode camera helper manager: run `w10-camd tof` while driving (turret on
+/// wedges RGB isp0, so only the ToF/isp1 stream is useful) and `w10-camd both`
+/// while parked (turret off -> RGB recovers, both ISPs stream). On the park switch
+/// wait for the turret to spin down and the RGB reset (tx_loop's 0x1d 05 00) to
+/// land before opening video2. `both` forks a ToF child, so the helper is spawned
+/// in its own session (setsid) and stopped by killing the whole process group.
+fn camera_manager(sh: std::sync::Arc<direct::Shared>, camd: String) {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Child, Command, Stdio};
+    use std::time::Duration;
+    let mut child: Option<Child> = None;
+    let mut pgid: i32 = 0;
+    let mut cur = String::new();
+    loop {
+        let want = if sh.is_parked() { "both" } else { "tof" };
+        if cur != want {
+            if pgid > 0 {
+                unsafe { libc::kill(-pgid, libc::SIGKILL) };
+            }
+            if let Some(mut c) = child.take() {
+                let _ = c.wait(); // reap the helper parent (its ToF fork is init-reaped)
+            }
+            // PARK: let the turret coast to a stop + the RGB un-wedge reset land
+            // before (re)opening video2, else a still-spinning turret re-wedges it.
+            thread::sleep(Duration::from_millis(if want == "both" { 3000 } else { 500 }));
+            let mut cmd = Command::new(&camd);
+            cmd.arg(want)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            unsafe {
+                cmd.pre_exec(|| {
+                    libc::setsid();
+                    Ok(())
+                });
+            }
+            match cmd.spawn() {
+                Ok(c) => {
+                    pgid = c.id() as i32; // setsid made pid == pgid
+                    child = Some(c);
+                    log::info!("auto-cam: w10-camd {want}");
+                }
+                Err(e) => {
+                    pgid = 0;
+                    log::warn!("auto-cam: spawn {camd} {want}: {e}");
+                }
+            }
+            cur = want.to_string();
+        }
+        thread::sleep(Duration::from_millis(300));
     }
 }

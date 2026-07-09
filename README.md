@@ -96,8 +96,18 @@ watchdogs, kills ava (freeing `ttyS4`/`ttyS3` + the cameras), and starts
 ```sh
 deploy/direct-mode.sh start      # nav mode: /scan /odom /tf + IR camera
 deploy/direct-mode.sh observe    # park mode: RGB camera (turret off; no /scan)
+deploy/direct-mode.sh auto       # auto-switch: drive -> /scan+IR; stop -> RGB+IR
 deploy/direct-mode.sh restore    # ava back
 ```
+
+**`auto`** is the useful one: ros2dreame follows `/cmd_vel` and switches itself.
+While driving it spins the turret (`/scan` + IR, RGB is wedged); ~3 s after motion
+stops it parks the turret, sends the RGB un-wedge reset (`0x1d [05 00]`, see
+[docs/MCU.md](docs/MCU.md)), and runs **both** cameras -> `/camera` (RGB) +
+`/camera_ir` (IR) at once. It owns the `w10-camd` helper (starts `tof`<->`both`
+itself). So: drive the vacuum with the map + IR, stop, and look at RGB + IR
+together - no ava, no dock, no reboot. (Two full-res reliable JPEG streams over
+WiFi are heavy - ~4 fps each at the GUI; drop IR resolution/quality to smooth it.)
 
 **Freezing the watchdogs is mandatory, not cosmetic:** the vendor `monitor.sh`
 reboots (then factory-resets) the robot if ava is not alive, so `ava_off` freezes
