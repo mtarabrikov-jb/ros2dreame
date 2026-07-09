@@ -5,7 +5,7 @@
       "datatype": "std_msgs/msg/UInt8",
       "buttonText": "Fan ON",
       "buttonColor": "#43a047",
-      "advancedView": true,
+      "advancedView": false,
       "value": "{ \"data\": 100 }"
     },
     "Publish!fanoff": {
@@ -13,7 +13,7 @@
       "datatype": "std_msgs/msg/UInt8",
       "buttonText": "Fan OFF",
       "buttonColor": "#e53935",
-      "advancedView": true,
+      "advancedView": false,
       "value": "{ \"data\": 0 }"
     },
     "Publish!sideon": {
@@ -21,7 +21,7 @@
       "datatype": "std_msgs/msg/UInt8",
       "buttonText": "Side brush ON",
       "buttonColor": "#43a047",
-      "advancedView": true,
+      "advancedView": false,
       "value": "{ \"data\": 100 }"
     },
     "Publish!sideoff": {
@@ -29,7 +29,7 @@
       "datatype": "std_msgs/msg/UInt8",
       "buttonText": "Side brush OFF",
       "buttonColor": "#e53935",
-      "advancedView": true,
+      "advancedView": false,
       "value": "{ \"data\": 0 }"
     },
     "Publish!mainon": {
@@ -37,7 +37,7 @@
       "datatype": "std_msgs/msg/UInt8",
       "buttonText": "Main brush ON",
       "buttonColor": "#43a047",
-      "advancedView": true,
+      "advancedView": false,
       "value": "{ \"data\": 100 }"
     },
     "Publish!mainoff": {
@@ -45,7 +45,7 @@
       "datatype": "std_msgs/msg/UInt8",
       "buttonText": "Main brush OFF",
       "buttonColor": "#e53935",
-      "advancedView": true,
+      "advancedView": false,
       "value": "{ \"data\": 0 }"
     },
     "Publish!mopon": {
@@ -53,7 +53,7 @@
       "datatype": "std_msgs/msg/UInt8",
       "buttonText": "Mop ON (pads spin)",
       "buttonColor": "#43a047",
-      "advancedView": true,
+      "advancedView": false,
       "value": "{ \"data\": 100 }"
     },
     "Publish!mopoff": {
@@ -61,7 +61,7 @@
       "datatype": "std_msgs/msg/UInt8",
       "buttonText": "Mop OFF",
       "buttonColor": "#e53935",
-      "advancedView": true,
+      "advancedView": false,
       "value": "{ \"data\": 0 }"
     },
     "Publish!turreton": {
@@ -69,7 +69,7 @@
       "datatype": "std_msgs/msg/Bool",
       "buttonText": "Turret ON (drive/scan)",
       "buttonColor": "#43a047",
-      "advancedView": true,
+      "advancedView": false,
       "value": "{ \"data\": true }"
     },
     "Publish!turretoff": {
@@ -77,7 +77,7 @@
       "datatype": "std_msgs/msg/Bool",
       "buttonText": "Turret OFF (park/both cams)",
       "buttonColor": "#e53935",
-      "advancedView": true,
+      "advancedView": false,
       "value": "{ \"data\": false }"
     },
     "Publish!auto": {
@@ -85,7 +85,7 @@
       "datatype": "std_msgs/msg/Bool",
       "buttonText": "Resume AUTO",
       "buttonColor": "#1e88e5",
-      "advancedView": true,
+      "advancedView": false,
       "value": "{ \"data\": true }"
     },
     "Publish!dockdry": {
@@ -93,7 +93,7 @@
       "datatype": "std_msgs/msg/UInt8",
       "buttonText": "Dock DRY (fan)",
       "buttonColor": "#fb8c00",
-      "advancedView": true,
+      "advancedView": false,
       "value": "{ \"data\": 1 }"
     },
     "Publish!dockwash": {
@@ -101,7 +101,7 @@
       "datatype": "std_msgs/msg/UInt8",
       "buttonText": "Dock WASH (water!)",
       "buttonColor": "#1e88e5",
-      "advancedView": true,
+      "advancedView": false,
       "value": "{ \"data\": 2 }"
     },
     "Publish!dockoff": {
@@ -109,7 +109,7 @@
       "datatype": "std_msgs/msg/UInt8",
       "buttonText": "Dock OFF",
       "buttonColor": "#e53935",
-      "advancedView": true,
+      "advancedView": false,
       "value": "{ \"data\": 0 }"
     },
     "Teleop!drive": {
