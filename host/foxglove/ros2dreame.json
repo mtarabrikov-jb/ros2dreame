@@ -72,6 +72,14 @@
       "advancedView": true,
       "value": "{ \"data\": true }"
     },
+    "Teleop!drive": {
+      "topic": "/cmd_vel",
+      "publishRate": 5,
+      "upButton": { "field": "linear-x", "value": 0.15 },
+      "downButton": { "field": "linear-x", "value": -0.15 },
+      "leftButton": { "field": "angular-z", "value": 0.6 },
+      "rightButton": { "field": "angular-z", "value": -0.6 }
+    },
     "Image!rgb": {
       "imageMode": { "imageTopic": "/camera/image_raw/compressed" }
     },
@@ -143,21 +151,26 @@
     "splitPercentage": 30,
     "first": {
       "direction": "column",
-      "splitPercentage": 22,
-      "first": { "direction": "row", "first": "Publish!fanon", "second": "Publish!fanoff" },
+      "splitPercentage": 30,
+      "first": "Teleop!drive",
       "second": {
         "direction": "column",
-        "splitPercentage": 28,
-        "first": { "direction": "row", "first": "Publish!sideon", "second": "Publish!sideoff" },
+        "splitPercentage": 22,
+        "first": { "direction": "row", "first": "Publish!fanon", "second": "Publish!fanoff" },
         "second": {
           "direction": "column",
-          "splitPercentage": 38,
-          "first": { "direction": "row", "first": "Publish!mainon", "second": "Publish!mainoff" },
+          "splitPercentage": 28,
+          "first": { "direction": "row", "first": "Publish!sideon", "second": "Publish!sideoff" },
           "second": {
             "direction": "column",
-            "splitPercentage": 55,
-            "first": { "direction": "row", "first": "Publish!turreton", "second": "Publish!turretoff" },
-            "second": "Publish!auto"
+            "splitPercentage": 38,
+            "first": { "direction": "row", "first": "Publish!mainon", "second": "Publish!mainoff" },
+            "second": {
+              "direction": "column",
+              "splitPercentage": 55,
+              "first": { "direction": "row", "first": "Publish!turreton", "second": "Publish!turretoff" },
+              "second": "Publish!auto"
+            }
           }
         }
       }

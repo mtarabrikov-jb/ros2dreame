@@ -30,6 +30,13 @@ The control buttons publish to the topics ros2dreame subscribes to:
   `W10_AUTO` motion auto-switch.
 - Resume AUTO = `/set_auto {data: true}` (hand control back to motion-based auto).
 
+The **Teleop** panel (top-left) drives the wheels: it publishes
+`geometry_msgs/Twist` to `/cmd_vel` (up/down = linear, left/right = rotate).
+Driving MOVES the robot; the drive is gated by a 500 ms watchdog + speed clamp +
+cliff/bump hazard, and in `W10_AUTO` it flips to the DRIVING state (turret + map +
+IR) while you drive and parks ~3 s after you stop. Tune the speeds in the panel
+settings (defaults 0.15 m/s / 0.6 rad/s).
+
 ## Notes
 
 - The Image panels point at `/camera/image_raw/compressed` (RGB) and
