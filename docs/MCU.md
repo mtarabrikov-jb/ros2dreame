@@ -49,24 +49,57 @@ heartbeats). A bare zero MotorCtrl alone is not enough - so in observe mode
 
 ## nav vs observe mode (the RGB constraint)
 
-The vendor firmware only lets the **OV8856 RGB camera stream when the robot is
-fully idle/docked**. In *any* active mode - cleaning, manual control, or our
-driving the MCU/turret - the RGB pipeline dies with a continuous
-`[VIN_ERR] isp0 frame error, size 0 / sunxi_isp_reset / 8856 pd io` loop (the
-MIPI carries no pixel payload). This is a power/clock/firmware policy, **not** ISP
-contention and **not** fixable in software - confirmed in
-`dreame-vacuum-livestream/docs/REVERSE_ENGINEERING.md` (aggressive power-cycling
-gave zero RGB frames). The IR/ToF sensor (`ofilm0092`, a different sensor on the
-other ISP) is unaffected.
+RGB (`OV8856`/isp0) and `/scan` (the LDS) are **mutually exclusive**, but the
+cause is the **spinning LDS turret**, not "driving" or "any active mode". Proven
+with `ava` verifiably dead (freeze all four ava watchdogs, see below - an earlier
+`ava` respawn confound made this look like an "active mode" policy):
 
-So the two states are mutually exclusive at the firmware level, and `ros2dreame`
-exposes both:
+- observe, or nav with the turret off: RGB streams cleanly, **0** isp0 errors.
+- nav with the turret spinning: the turret disrupts the OV8856 MIPI - a
+  continuous `[VIN_ERR] isp0 frame error, size 0, hblank max.. min..` (the
+  horizontal-blank timing jitters ~2x) - and RGB stalls within a few seconds. No
+  regulator/clock change is logged at the transition, so it is a physical
+  disturbance (turret-motor EMI / shared-rail droop), not a firmware mode switch.
+- The disturbance **wedges isp0 persistently**: once the turret has spun, a plain
+  reopen of `/dev/video2` keeps erroring (`size 0`) even after the turret stops,
+  even with the sensor left idle during the turret, and even after a 60 s wait. It
+  clears only with an `ava` reprime (ava streaming RGB on isp0, on the dock) or a
+  reboot - not by waiting, reopening, a proactive stop-before-turret, or a VIN
+  driver unbind (which oopses the driver). Off-dock reprime is still unsolved.
+- The IR/ToF sensor (`ofilm0092`, isp1 - a separate ISP + MIPI lane) is unaffected.
+
+So driving itself is fine for RGB: `W10_NO_TURRET=1` runs nav (drive-capable,
+active MCU) with the turret parked, and RGB + IR both stream. The trade-off is
+**RGB vs `/scan`**, not RGB vs motion. `ros2dreame` exposes:
 
 | mode | MCU driving | LDS turret | topics | camera |
 |------|-------------|------------|--------|--------|
 | **nav** (`direct-mode.sh start`, default) | MotorCtrl + nav frames | spinning | `/scan` `/odom` `/tf` | **IR** (`/camera_ir`) |
-| **observe** (`direct-mode.sh observe`, `W10_OBSERVE=1`) | idle (zero MotorCtrl, no nav) | parked | (none) | **RGB** (`/camera`) |
+| **observe** (`direct-mode.sh observe`, `W10_OBSERVE=1`) | idle | parked | `/odom` `/tf` | **RGB** (`/camera`) |
+| nav + `W10_NO_TURRET=1` | MotorCtrl + nav frames | parked | `/odom` `/tf` (no `/scan`) | **RGB** (+ IR) |
 
-Verified on the robot: observe mode delivers real 672x504 colour RGB
-(`sensor_msgs/CompressedImage`) end to end; nav mode delivers `/scan` + `/odom` +
-the IR feed.
+Verified on the robot (ava dead): observe delivers real 672x504 colour RGB
+(`sensor_msgs/CompressedImage`) end to end; nav delivers `/scan` + `/odom` + the
+IR feed; nav+`W10_NO_TURRET` drives with RGB+IR at ~13 fps and 0 isp0 errors.
+
+## keeping ava off (the reboot watchdog)
+
+Stopping `ava` is not just "kill it": the vendor `/etc/rc.d/monitor.sh` probes it
+with `avacmd media status_get` and, after 3 failed probes (~90 s), **reboots the
+robot** - and `factory_reset.sh monitor_rescue_brick` **factory-resets** it if it
+is still down after that reboot. So `ava` can only be stopped if `monitor.sh` is
+stopped too. `direct-mode.sh` `ava_off` freezes (`kill -STOP`) the whole ava
+reboot+respawn set and only then kills ava:
+
+- `monitor.sh` - the rebooter/factory-resetter (**the** safety-critical freeze).
+- `exec_monitor.sh` + `exec_proc` - the launcher chain that respawns ava (else it
+  comes back and grabs `ttyS4` + `video1`/`video2` from under `ros2dreame`).
+- `sys_monitor.sh` - ava memory/status monitor.
+
+Each is an init child, and init does not respawn a *stopped* child, so the freeze
+holds for the session; `ava_off` verifies `monitor.sh` reached state `T` before
+touching ava and aborts otherwise. `restore`/`ava_on` touches
+`/tmp/restart_ava.mark` (tells `monitor.sh` the downtime was intentional), resumes
+the monitors, and relaunches real ava. Do **not** bind a stub over `/usr/bin/ava`:
+that leaves `monitor.sh` running, the stub fails the health probe, and it triggers
+exactly the reboot + factory-reset above.

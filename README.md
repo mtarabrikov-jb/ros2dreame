@@ -18,10 +18,13 @@ Working, ava OFF, one binary (verified on the robot -> a Jazzy container):
 - `/odom` `nav_msgs/Odometry` + `/tf` (`odom -> base_link`) + `/tf_static`
   (`base_link -> laser`)
 - `/camera/image_raw/compressed` (RGB), `/camera_ir/image_raw/compressed` (IR)
-  `sensor_msgs/CompressedImage`. Both verified end to end. RGB and the driving
-  telemetry are **mutually exclusive** in the robot's firmware: the OV8856 RGB
-  camera only streams when the robot is idle/parked, so RGB comes from **observe
-  mode** while `/scan` + `/odom` + IR come from **nav mode** (see [docs/MCU.md](docs/MCU.md)).
+  `sensor_msgs/CompressedImage`. Both verified end to end. RGB and `/scan` are
+  **mutually exclusive**: the spinning **LDS turret** disrupts the OV8856 MIPI and
+  wedges isp0 (recoverable only by an ava reprime or reboot), so RGB streams only
+  with the turret off. RGB comes from **observe mode** (turret parked), `/scan` +
+  IR from **nav mode** (turret spinning). Driving itself is fine for RGB - it is
+  the turret, not motion: `W10_NO_TURRET=1` drives with RGB+IR, minus `/scan`
+  (see [docs/MCU.md](docs/MCU.md)).
 
 - `/imu` `sensor_msgs/Imu`, `/battery` `sensor_msgs/BatteryState`,
   `/dock` `/bumper` `/cliff` `std_msgs/Bool` (from Triggers)
@@ -56,8 +59,8 @@ ring and publishes each frame as `sensor_msgs/CompressedImage`. No HTTP/MJPEG
 server, no `go2rtc`, no `ava_cam_relay` - frames go straight into ROS topics.
 
 - **RGB** (OV8856, /dev/video2, isp0): driven via the vendor `libsunxicamera.so`
-  (NV21 672x504). Needs the sensor primed (by `ava` or a reboot) and the robot
-  parked - runs in `observe` mode -> `/camera`.
+  (NV21 672x504). Needs the sensor primed (by `ava` or a reboot) and the **LDS
+  turret off** (spinning it wedges isp0) - runs in `observe` mode -> `/camera`.
 - **IR/ToF** (ofilm0092 Sunny iToF, /dev/video1, isp1): driven with **raw V4L2**
   (MPLANE BG12 224x1558) + the ToF media pipeline + the sensor's i2c enable
   registers on `/dev/i2c-2` @0x3d (`libsunxicamera` is RGB-only and can't bring the
@@ -83,17 +86,21 @@ and over best-effort WiFi one lost fragment drops the whole frame.
 
 ## Full autonomy, ava OFF (one static binary + one dynamic helper, one script)
 
-`deploy/direct-mode.sh` (run on the robot) freezes both ava watchdogs, kills ava
-(freeing `ttyS4`/`ttyS3` + the cameras), and starts `w10-camd` + `ros2dreame`:
+`deploy/direct-mode.sh` (run on the robot) freezes the ava reboot+respawn
+watchdogs, kills ava (freeing `ttyS4`/`ttyS3` + the cameras), and starts
+`w10-camd` + `ros2dreame`:
 
 ```sh
 deploy/direct-mode.sh start      # nav mode: /scan /odom /tf + IR camera
-deploy/direct-mode.sh observe    # park mode: RGB camera (idle; no /scan /odom)
+deploy/direct-mode.sh observe    # park mode: RGB camera (turret off; no /scan)
 deploy/direct-mode.sh restore    # ava back
 ```
 
-`start` (nav) and `observe` (park) are mutually exclusive because the firmware
-only streams the RGB camera when the robot is idle - see [docs/MCU.md](docs/MCU.md).
+**Freezing the watchdogs is mandatory, not cosmetic:** the vendor `monitor.sh`
+reboots (then factory-resets) the robot if ava is not alive, so `ava_off` freezes
+it first - see [docs/MCU.md](docs/MCU.md). `start` (nav) and `observe` (park) are
+mutually exclusive only because of the LDS turret (it wedges the RGB isp0), not
+because of motion - the same doc covers the `W10_NO_TURRET` drive-with-RGB path.
 
 ## GUI (host side)
 

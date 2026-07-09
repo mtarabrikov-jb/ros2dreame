@@ -300,7 +300,11 @@ pub fn run(mcu_path: &str, lds_path: &str, observe: bool, tx: Sender<Tap>) -> Ar
         start: Instant::now(),
         shutdown: AtomicBool::new(false),
         hazard: AtomicBool::new(false),
-        lidar_on: AtomicBool::new(!observe), // turret spins for /scan in nav mode only
+        // turret spins for /scan in nav mode only. W10_NO_TURRET forces it off
+        // even in nav (still drive-capable, but no LDS/scan): used to test whether
+        // the spinning LDS turret is what disrupts the OV8856/isp0 MIPI timing and
+        // stalls RGB in nav.
+        lidar_on: AtomicBool::new(!observe && std::env::var_os("W10_NO_TURRET").is_none()),
         observe: AtomicBool::new(observe),
         enabled: AtomicBool::new(false),
         linear_bits: AtomicU32::new(0),

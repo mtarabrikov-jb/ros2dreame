@@ -9,8 +9,10 @@
 #   - republishes everything as ROS 2.
 # The only runtime dependency is the vendor /usr/lib/libsunxicamera.so (dlopen'd).
 #
-# Freezes BOTH ava watchdogs (sys_monitor.sh ava + rc.d/monitor.sh) so ava does
-# not respawn mid-session.
+# Freezes the ava reboot+respawn watchdogs so ava stays off for the session (see
+# ava_off). CRITICAL: the vendor /etc/rc.d/monitor.sh REBOOTS the robot (then
+# factory-resets it) if ava is not alive - freezing it is what makes ava safe to
+# stop at all.
 #
 #   direct-mode.sh start      ava off, ros2dreame up
 #   direct-mode.sh restore    stop, bring ava back
@@ -20,31 +22,66 @@ set -u
 DIR="$(cd "$(dirname "$0")" && pwd)"
 R2D="${R2D:-$DIR/ros2dreame}"
 CAMD="${CAMD:-$DIR/w10-camd}"   # dynamic camera helper (dlopens libsunxicamera)
+AVA_RESTART_MARK=/tmp/restart_ava.mark
 
-sysmon() { ps 2>/dev/null | grep '[s]ys_monitor.sh ava' | awk '{print $1}'; }
-mon()    { ps 2>/dev/null | grep '[r]c.d/monitor.sh'     | awk '{print $1}'; }
-freeze() { for p in $(sysmon) $(mon); do kill -STOP "$p" 2>/dev/null; done; }
-resume() { for p in $(sysmon) $(mon); do kill -CONT "$p" 2>/dev/null; done; }
+# --- keep ava OFF safely -----------------------------------------------------
+# The vendor firmware fights an absent ava HARD: /etc/rc.d/monitor.sh probes ava
+# with `avacmd media status_get` and, after 3 failed probes, REBOOTS the robot -
+# and factory-resets it ("monitor_rescue_brick") if it is still down after the
+# reboot. So ava can only be stopped if monitor.sh is stopped too. We freeze
+# (kill -STOP) the whole ava reboot+respawn set; each is an init child and init
+# does not respawn a *stopped* child, so the freeze holds for the whole session:
+#   monitor.sh       - the rebooter/factory-resetter (THE safety-critical freeze)
+#   exec_monitor.sh  \ ava launcher chain: exec_monitor restarts exec_proc, which
+#   exec_proc        / respawns ava - freeze both so ava does not come back and
+#                      grab ttyS4 + video1/video2 out from under ros2dreame
+#   sys_monitor.sh   - ava memory/status monitor
+# (A "bind a stub over /usr/bin/ava" approach was WORSE: it left monitor.sh
+# running, the stub failed the health probe, and it triggered exactly the
+# reboot+factory-reset above. Freeze monitor.sh; never stub.)
+WD_COMMS='monitor.sh exec_monitor.sh exec_proc sys_monitor.sh'
+wd_pids() { for d in /proc/[0-9]*; do for c in $WD_COMMS; do
+    [ "$(cat "$d/comm" 2>/dev/null)" = "$c" ] && echo "${d##*/}"; done; done; }
+mon_frozen() {   # is monitor.sh (the rebooter) actually stopped (state T)?
+    for d in /proc/[0-9]*; do [ "$(cat "$d/comm" 2>/dev/null)" = monitor.sh ] || continue
+        [ "$(cut -d' ' -f3 "$d/stat" 2>/dev/null)" = T ] || return 1; done; return 0; }
+
+ava_off() {
+    for p in $(wd_pids); do kill -STOP "$p" 2>/dev/null; done
+    if ! mon_frozen; then
+        echo ">> FATAL: could not freeze monitor.sh (it would REBOOT the robot). Aborting."
+        ava_on; exit 1
+    fi
+    killall -9 ava avacmd 2>/dev/null   # safe now: monitor.sh is stopped -> no reboot
+    sleep 1
+}
+ava_on() {
+    touch "$AVA_RESTART_MARK" 2>/dev/null   # tell monitor.sh this downtime was intentional (no reboot)
+    for p in $(wd_pids); do kill -CONT "$p" 2>/dev/null; done
+    killall -9 ava 2>/dev/null
+    [ -x /etc/rc.d/ava.sh ] && /etc/rc.d/ava.sh >/dev/null 2>&1 &
+}
 
 case "${1:-status}" in
     start|observe)
         # start  = nav mode: drive MCU, spin lidar -> /scan /odom + IR camera.
-        #          RGB is dead (vendor firmware kills OV8856 in any active mode).
+        #          RGB stalls here - the spinning LDS turret disrupts the OV8856
+        #          MIPI (isp0 frame errors) and wedges it until an ava reprime or
+        #          reboot; it is NOT "any active mode" (nav with the turret off
+        #          streams RGB fine). See docs/MCU.md.
         # observe = park mode: idle MCU (no drive/nav, turret off) -> RGB camera
-        #          + /odom, no /scan. The only state where the OV8856 streams.
+        #          + /odom, no /scan.
         [ -x "$R2D" ] || { echo "ERROR: $R2D missing (deploy first)"; exit 1; }
         OBS=""; [ "$1" = observe ] && OBS="W10_OBSERVE=1"
-        echo ">> stop any prior stack, freeze ava watchdogs, kill relay + ava"
+        echo ">> stop any prior stack, force ava OFF (freeze reboot+respawn watchdogs)"
         killall ros2dreame w10-camd avatap-relay ava_cam_relay w10-cam go2rtc 2>/dev/null
-        freeze
-        killall ava 2>/dev/null
         # ava MUST be fully dead before we open a camera: while it lives it holds
         # video1/video2 and runs the RGB pipeline on isp0, which corrupts our
         # capture (kernel logs "video1 open busy" + "isp0 frame error" and the
         # frame is pure noise). This was THE cause of the long "ToF only streams
-        # noise" red herring. Wait for it to exit, then force-kill as a backstop.
-        for i in 1 2 3 4 5; do pidof ava >/dev/null 2>&1 || break; sleep 1; done
-        killall -9 ava 2>/dev/null
+        # noise" red herring. ava_off freezes monitor.sh first (else it reboots
+        # the robot when ava goes away), then the launcher chain, then kills ava.
+        ava_off
         sleep 1
         mkdir -p /data/log
         IR=""
@@ -74,16 +111,15 @@ case "${1:-status}" in
         fi
         ;;
     restore)
-        echo ">> stop ros2dreame + camera helper, restart ava, resume watchdogs"
+        echo ">> stop ros2dreame + camera helper, restore real ava, resume watchdogs"
         killall ros2dreame w10-camd 2>/dev/null
         sleep 1
-        /etc/rc.d/ava.sh >/dev/null 2>&1 &
-        sleep 3
-        resume
-        sleep 1
-        pidof ava >/dev/null && echo ">> ava back" || echo ">> WARN: ava not up yet"
+        ava_on
+        sleep 5
+        if pidof ava >/dev/null; then echo ">> ava back"; else echo ">> WARN: ava not up yet (retry: direct-mode.sh restore)"; fi
         ;;
     status)
+        mon_frozen && echo "monitor.sh : FROZEN (ava reboot-watchdog held off)"
         for p in ava ros2dreame w10-camd; do
             echo -n "$p : "; pidof "$p" || echo none
         done
