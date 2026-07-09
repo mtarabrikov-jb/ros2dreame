@@ -33,7 +33,7 @@ topics:
 foxglove:                   ## foxglove_bridge WebSocket (ws://localhost:8765) - import host/foxglove/slam.json
 	-$(DC) exec -T $(SVC) pkill -9 -f '[f]oxglove_bridge' 2>/dev/null || true
 	$(GUI) '$(SRC) ros2 run foxglove_bridge foxglove_bridge --ros-args -p port:=8765 -p address:=0.0.0.0 $(LOG)'
-	@echo ">> foxglove_bridge on ws://localhost:8765 -- open app.foxglove.dev, import host/foxglove/slam.json"
+	@echo ">> foxglove_bridge on ws://localhost:8765 -- in app.foxglove.dev import host/foxglove/{full,slam,ros2dreame}.json (full = map + all controls in one window)"
 slam:                       ## slam_toolbox live map (auto-loads /cfg/maps/dreame_map if present) + rviz
 	$(GUI) '$(SRC) ros2 launch slam_toolbox online_async_launch.py slam_params_file:=/cfg/slam/dreame_slam.yaml $(LOG)'
 	$(GUI) '$(SRC) rviz2 -d /cfg/rviz/slam.rviz $(LOG)'
