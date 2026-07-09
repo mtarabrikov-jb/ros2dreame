@@ -29,7 +29,9 @@ pub enum Tap {
     Battery(Box<BatteryState>),
     Triggers { dock: bool, bumper: bool, cliff: bool },
     /// [wheel_left, wheel_right, main_brush, side_brush, load] raw i16 currents.
-    Currents(Box<Int16MultiArray>),
+    Currents([i16; 5]),
+    /// Actuator/turret state telemetry (published periodically, not event-driven).
+    State { turret: bool, fan: u8, side_brush: u8, main_brush: u8, pump: u8 },
 }
 
 // --- LDS -> LaserScan geometry (W10) -----------------------------------------
@@ -129,10 +131,11 @@ pub(crate) fn battery_msg(b: &Battery) -> BatteryState {
     }
 }
 
-/// Motor currents -> `std_msgs/Int16MultiArray`
-/// `[wheel_left, wheel_right, main_brush, side_brush, load]` (raw i16 counts).
-pub(crate) fn currents_msg(wl: i16, wr: i16, main: i16, side: i16, load: i16) -> Int16MultiArray {
-    Int16MultiArray { layout: Default::default(), data: vec![wl, wr, main, side, load] }
+/// Motor currents -> `std_msgs/Int16MultiArray` (the combined `/motor_currents`
+/// topic). `[wheel_left, wheel_right, main_brush, side_brush, load]` (raw i16).
+/// The same values are also published individually as `/current/<name>`.
+pub(crate) fn currents_array(c: [i16; 5]) -> Int16MultiArray {
+    Int16MultiArray { layout: Default::default(), data: c.to_vec() }
 }
 
 /// Build a LaserScan from one accumulated sweep of (raw_angle_rad, dist_m).
@@ -292,9 +295,7 @@ pub fn mcu_reader(addr: String, tx: Sender<Tap>) {
                         let _ = tx.send(Tap::Imu(Box::new(imu_from_status10(&s))));
                     }
                     Msg::Status20ms(s) => {
-                        let _ = tx.send(Tap::Currents(Box::new(currents_msg(
-                            wl, wr, s.roller_current, s.sidebrush_current, load,
-                        ))));
+                        let _ = tx.send(Tap::Currents([wl, wr, s.roller_current, s.sidebrush_current, load]));
                         let odom = odom_from_status(&s, gyro_z_dps);
                         if tx.send(Tap::Odom(Box::new(odom))).is_err() {
                             return;

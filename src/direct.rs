@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use dreame_w10_proto::lds::LdsScanner;
 use dreame_w10_proto::{encode_frame, encode_motor_ctrl, parse_body, FrameScanner, Msg};
 
-use crate::tap::{battery_msg, currents_msg, imu_from_status10, odom_from_status, Sweep, Tap};
+use crate::tap::{battery_msg, imu_from_status10, odom_from_status, Sweep, Tap};
 
 const MAX_LINEAR_MM_S: f32 = 150.0;
 const MAX_ROT_RAD_S: f32 = 1.5;
@@ -104,6 +104,19 @@ impl Shared {
     pub fn set_pump(&self, v: u8) {
         self.pump.store(v, Ordering::Relaxed);
     }
+    /// Turret (LDS) currently commanded on (driving) vs off (parked).
+    pub fn turret_on(&self) -> bool {
+        self.lidar_on.load(Ordering::Relaxed)
+    }
+    /// Commanded actuator levels: (fan, side_brush, main_brush, pump).
+    pub fn levels(&self) -> (u8, u8, u8, u8) {
+        (
+            self.fan.load(Ordering::Relaxed),
+            self.side_brush.load(Ordering::Relaxed),
+            self.main_brush.load(Ordering::Relaxed),
+            self.pump.load(Ordering::Relaxed),
+        )
+    }
 }
 
 fn clampf(v: f32, lo: f32, hi: f32) -> f32 {
@@ -173,9 +186,7 @@ fn rx_loop(mut rd: File, w: Arc<Mutex<File>>, sh: Arc<Shared>, tx: Sender<Tap>) 
                     let _ = tx.send(Tap::Imu(Box::new(imu_from_status10(&s))));
                 }
                 Msg::Status20ms(s) => {
-                    let _ = tx.send(Tap::Currents(Box::new(currents_msg(
-                        wl, wr, s.roller_current, s.sidebrush_current, load,
-                    ))));
+                    let _ = tx.send(Tap::Currents([wl, wr, s.roller_current, s.sidebrush_current, load]));
                     let odom = odom_from_status(&s, gyro_z_dps);
                     if tx.send(Tap::Odom(Box::new(odom))).is_err() {
                         return;
@@ -380,6 +391,23 @@ pub fn run(mcu_path: &str, lds_path: &str, observe: bool, tx: Sender<Tap>) -> Ar
     {
         let (w, sh) = (w.clone(), sh.clone());
         thread::spawn(move || tx_loop(w, sh));
+    }
+    {
+        // Periodic actuator/turret state telemetry -> /state/* (not event-driven
+        // like the currents/odom decoded from the MCU stream).
+        let (sh, tx) = (sh.clone(), tx.clone());
+        thread::spawn(move || {
+            while !sh.shutdown.load(Ordering::Relaxed) {
+                let (fan, side_brush, main_brush, pump) = sh.levels();
+                if tx
+                    .send(Tap::State { turret: sh.turret_on(), fan, side_brush, main_brush, pump })
+                    .is_err()
+                {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(400));
+            }
+        });
     }
     match open_serial(lds_path, libc::B230400) {
         Ok(lds_rd) => {

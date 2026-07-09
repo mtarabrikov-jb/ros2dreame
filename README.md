@@ -28,6 +28,11 @@ Working, ava OFF, one binary (verified on the robot -> a Jazzy container):
 
 - `/imu` `sensor_msgs/Imu`, `/battery` `sensor_msgs/BatteryState`,
   `/dock` `/bumper` `/cliff` `std_msgs/Bool` (from Triggers)
+- **motor currents** `/current/{wheel_left,wheel_right,main_brush,side_brush,load}`
+  `std_msgs/Int16` (also combined in `/motor_currents` `Int16MultiArray`)
+- **state** `/state/turret` `Bool` + `/state/mode` `String` (DRIVING/PARKED) +
+  `/state/{fan,side_brush,main_brush,water_pump}` `UInt8` (commanded actuator
+  levels) - handy for a Foxglove / rqt dashboard
 - `/cmd_vel` `geometry_msgs/Twist` -> `MotorCtrl` (teleop; gated by watchdog +
   clamp + cliff/bump hazard). Verified: drove the robot 7.6 cm from the container.
 

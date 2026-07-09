@@ -250,6 +250,27 @@ fn main() {
         let t = mk_pub(&mut node, "/", "motor_currents", "std_msgs", "Int16MultiArray");
         node.create_publisher::<msg::Int16MultiArray>(&t, None).expect("currents pub")
     };
+    // Named per-motor currents /current/<name> (std_msgs/Int16) - easier to plot
+    // than the /motor_currents array. Order matches [wl, wr, main, side, load].
+    let mut current_pubs = Vec::new();
+    for n in ["wheel_left", "wheel_right", "main_brush", "side_brush", "load"] {
+        let t = mk_pub(&mut node, "/current", n, "std_msgs", "Int16");
+        current_pubs.push(node.create_publisher::<msg::Int16>(&t, None).expect("current pub"));
+    }
+    // Actuator/turret state /state/* telemetry (from the periodic Tap::State).
+    let turret_pub = {
+        let t = mk_pub(&mut node, "/state", "turret", "std_msgs", "Bool");
+        node.create_publisher::<msg::Bool>(&t, None).expect("turret pub")
+    };
+    let mode_pub = {
+        let t = mk_pub(&mut node, "/state", "mode", "std_msgs", "String");
+        node.create_publisher::<msg::StringMsg>(&t, None).expect("mode pub")
+    };
+    let mut level_pubs = Vec::new();
+    for n in ["fan", "side_brush", "main_brush", "water_pump"] {
+        let t = mk_pub(&mut node, "/state", n, "std_msgs", "UInt8");
+        level_pubs.push(node.create_publisher::<msg::UInt8>(&t, None).expect("level pub"));
+    }
 
     // Camera publishers: /<frame>/image_raw/compressed (image_transport compressed).
     let mut img_pubs: Vec<(String, ros2_client::Publisher<msg::CompressedImage>)> = Vec::new();
@@ -380,7 +401,19 @@ fn main() {
                 let _ = cliff_pub.publish(msg::Bool { data: cliff });
             }
             Tap::Currents(c) => {
-                let _ = currents_pub.publish(*c);
+                let _ = currents_pub.publish(crate::tap::currents_array(c));
+                for (p, &v) in current_pubs.iter().zip(c.iter()) {
+                    let _ = p.publish(msg::Int16 { data: v });
+                }
+            }
+            Tap::State { turret, fan, side_brush, main_brush, pump } => {
+                let _ = turret_pub.publish(msg::Bool { data: turret });
+                let _ = mode_pub.publish(msg::StringMsg {
+                    data: if turret { "DRIVING" } else { "PARKED" }.into(),
+                });
+                for (p, v) in level_pubs.iter().zip([fan, side_brush, main_brush, pump]) {
+                    let _ = p.publish(msg::UInt8 { data: v });
+                }
             }
         }
     }

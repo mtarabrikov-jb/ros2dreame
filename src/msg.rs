@@ -90,6 +90,18 @@ pub struct UInt8 {
     pub data: u8,
 }
 
+/// std_msgs/Int16
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct Int16 {
+    pub data: i16,
+}
+
+/// std_msgs/String (named `StringMsg` to avoid shadowing std::string::String)
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct StringMsg {
+    pub data: String,
+}
+
 /// std_msgs/MultiArrayDimension
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct MultiArrayDimension {
