@@ -6,8 +6,9 @@ SVC  := ros2dreame-gui
 SRC  := source /opt/ros/jazzy/setup.bash &&
 GUI  := $(DC) exec -d $(SVC) bash -c   # detached: GUI opens, make returns
 RUN  := $(DC) exec $(SVC) bash -c      # attached (stdin): terminal tools
+NAME ?= dreame_map                     # map basename for `make save-map`
 
-.PHONY: build up all down shell topics rviz rqt steer image tf teleop foxglove slam
+.PHONY: build up all down shell topics rviz rqt steer image tf teleop foxglove slam save-map
 build:
 	$(DC) build
 up:
@@ -33,6 +34,12 @@ slam:                       ## slam_toolbox live map + rviz (turret must spin fo
 	$(GUI) '$(SRC) rviz2 -d /cfg/rviz/slam.rviz'
 	@echo ">> slam_toolbox + rviz up. /scan needs the turret spinning (Foxglove Turret ON, or make steer + drive)."
 	@echo ">> Foxglove: import host/foxglove/slam.json (3D panel: /map + /scan + TF). Drive to grow the map."
+save-map:                   ## save current map to host/maps/ (NAME=dreame_map): .pgm/.yaml + slam .posegraph/.data
+	-$(DC) exec -T $(SVC) bash -c 'ros2 pkg prefix nav2_map_server >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq ros-jazzy-nav2-map-server)'
+	$(RUN) '$(SRC) ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: /cfg/maps/$(NAME)}"'
+	$(RUN) '$(SRC) ros2 run nav2_map_server map_saver_cli -f /cfg/maps/$(NAME) --ros-args -p save_map_timeout:=15.0'
+	-$(DC) exec -T $(SVC) bash -c 'chown $$(stat -c "%u:%g" /cfg/maps) /cfg/maps/$(NAME).* 2>/dev/null'
+	@echo ">> saved host/maps/$(NAME).{pgm,yaml,posegraph,data}"
 rviz:                       ## /scan /odom /tf + pose
 	$(GUI) '$(SRC) rviz2 -d /cfg/rviz/dreame.rviz'
 rqt:                        ## everything: topics, images, plots, publisher

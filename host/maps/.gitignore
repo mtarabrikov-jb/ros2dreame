@@ -1,0 +1,3 @@
+# generated slam maps (make save-map) - keep the dir, ignore the artifacts
+*
+!.gitignore
