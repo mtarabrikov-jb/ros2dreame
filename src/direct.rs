@@ -252,6 +252,11 @@ fn rx_loop(mut rd: File, w: Arc<Mutex<File>>, sh: Arc<Shared>, tx: Sender<Tap>) 
 fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
     let mut tick: u64 = 0;
     let mut mbuf = [0u8; 64];
+    // Dock off-pulse: the base station keeps its pump/fan running until told to
+    // stop, so when /set_station returns to 0 we send the idle 0x26 a few times to
+    // actively stop it (then go quiet so parked-mode RGB is undisturbed).
+    let mut prev_station: u8 = 0;
+    let mut off_pulse: u32 = 5; // also pulse on startup, to stop any dock cycle left running
     // In observe (parked, turret off) ros2dreame emits the MCU camera-AI-reset
     // frame `0x1d [0x05, 0x00]`. ava's node_signal::AIReset2ComProcess builds
     // exactly this from a CAMERA_AI_RESET msg (byte0=0x00 = reset; 0x01 = enable,
@@ -293,12 +298,23 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
         // robot is normally parked (observe) while docked, so /set_station must work
         // when parked. station=0 falls through to the nav-mode idle 0x26 heartbeat.
         let station = sh.station.load(Ordering::Relaxed);
-        if station != 0 && tick % 50 == 30 {
-            let p: [u8; 8] = match station {
-                1 => [0x0e, 0x00, 0x00, 0x78, 0x00, 0x00, 0x01, 0x02], // dry (dock fan)
-                _ => [0x0d, 0x64, 0x46, 0x00, 0x00, 0x00, 0x00, 0x02], // wash: byte1=0x64 pump rate, byte2=0x46 water
+        if station == 0 && prev_station != 0 {
+            off_pulse = 5; // just switched off -> pulse the idle 0x26 to stop the dock
+        }
+        prev_station = station;
+        if tick % 50 == 30 {
+            let p: Option<[u8; 8]> = match station {
+                1 => Some([0x0e, 0x00, 0x00, 0x78, 0x00, 0x00, 0x01, 0x02]), // dry (dock fan)
+                2 => Some([0x0d, 0x64, 0x46, 0x00, 0x00, 0x00, 0x00, 0x02]), // wash: byte1 pump rate, byte2 water
+                _ if off_pulse > 0 => {
+                    off_pulse -= 1;
+                    Some([0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02]) // idle -> dock off
+                }
+                _ => None,
             };
-            send(&w, 0x26, &p);
+            if let Some(p) = p {
+                send(&w, 0x26, &p);
+            }
         }
         if observe {
             // Idle/parked: a zero MotorCtrl keeps the MCU streaming telemetry
