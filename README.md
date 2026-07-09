@@ -38,10 +38,13 @@ Working, ava OFF, one binary (verified on the robot -> a Jazzy container):
 - **actuator control** `/set_{fan,side_brush,main_brush,mop}` `std_msgs/UInt8`
   (0 = off, ~1-150 = level -> the SetCleaning frame). `mop` = the two rotating mop
   pads (byte[3]); the robot has no water pump. Publish from a GUI to toggle.
-- **base station (dock) control** `/set_station` `std_msgs/UInt8`: 0 = idle,
-  1 = dry the mop pads (dock fan), 2 = wash the mop pads (dock water pump). Sent as
-  the `0x26` frame (RE'd from ava; see [docs/MCU.md](docs/MCU.md)). Only run wash
-  (2) docked + attended - it pumps water into the base.
+- **base station (dock) control** `/set_station` `std_msgs/UInt8`: 0 = idle/stop,
+  1 = dry the mop pads (dock fan), 2 = **run the full mop-wash cycle** (a self-timed
+  state machine replayed from ava: wet wash with a pulsing pump + rotating pads ->
+  scrub -> dock drying fan, then idle; `WASH_STEPS` in `src/direct.rs`). Driven via
+  the `0x26` frame (pump/fan) + SetCleaning (pads); RE'd from ava, see
+  [docs/MCU.md](docs/MCU.md). Only run wash docked + attended - it pumps water into
+  the base; `/set_station 0` aborts.
 - **turret control** `/set_turret` `std_msgs/Bool`: true = drive state (turret +
   `/scan` + IR, RGB drops), false = park state (turret off, both cameras). In
   `W10_AUTO` it takes manual control (pauses the motion auto-switch); `/set_auto`

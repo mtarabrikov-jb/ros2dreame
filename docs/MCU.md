@@ -48,8 +48,17 @@ mop wash/dry from Valetudo (`MopDockClean`/`MopDockDryManualTriggerCapability`):
 
 `src/direct.rs` sends these when `station` is set (`/set_station` `0`/`1`/`2`). The
 idle heartbeat keeps `byte7=0x04` (the mcud value, benign); the dock commands use
-ava's `byte7=0x02`. No `0x25` frame is used on this dock. Only trigger `wash` (the
-water pump) when the robot is docked and attended - it pumps water into the base.
+ava's `byte7=0x02`. No `0x25` frame is used on this dock. `/set_station 0` sends a
+few idle `0x26` (the dock keeps running until told to stop). Only trigger a wash
+when docked + attended - it pumps water into the base.
+
+**The full wash cycle** (`/set_station 2`) is a state machine (`WASH_STEPS` in
+`src/direct.rs`) captured by snooping ava's ttyS4 during a Valetudo wash: it drives
+**both** the pump/fan (0x26) and the mop pads (SetCleaning `[00 01 00 <pad> 00 00]`,
+mop mode 00 - the pads do NOT rotate while docked in vacuum mode 0x03). Cycle: wet
+wash (water on, pump speed ramps `00`->`78`->`64`, pads high `0xd6`) ~33 s -> water
+off, pads scrub the worked-in water (`0x4b`) ~90 s -> dock drying fan
+(`0e 00 00 78 00 00 01 02`) -> idle. `/set_station 0` aborts mid-cycle.
 
 ## What the MCU REPORTS (decoded -> ROS 2)
 

@@ -249,9 +249,40 @@ fn rx_loop(mut rd: File, w: Arc<Mutex<File>>, sh: Arc<Shared>, tx: Sender<Tap>) 
 
 /// TX: MotorCtrl at 50 Hz plus the periodic frames `ava` emits (which also keep
 /// the LDS turret spinning while `lidar_on`).
+/// ava's mop-wash cycle, captured by snooping ttyS4 during a Valetudo-triggered
+/// wash. Each step: (0x26 pump frame, mop-pad level, duration ms). Structure:
+/// wet wash (water on + pads high, pump speed ramps) -> water off, pads scrub the
+/// worked-in water (~90 s) -> dock drying fan. Replayed on /set_station 2; after
+/// the last step the driver returns station to 0 (idle + off-pulse). During a step
+/// the SetCleaning frame drives the pads (`[00 01 00 <pad> 00 00]`, mop mode 00).
+const WASH_STEPS: &[([u8; 8], u8, u64)] = &[
+    ([0x0d, 0x00, 0x46, 0, 0, 0, 0, 0x02], 0xd6, 20_700), // wet (slow pump) + pads high
+    ([0x0d, 0x78, 0x46, 0, 0, 0, 0, 0x02], 0x00, 8_000),  // wet (fast pump) + pads off
+    ([0x0d, 0x64, 0x46, 0, 0, 0, 0, 0x02], 0x2a, 4_300),  // wet + pads low
+    ([0x0d, 0x64, 0x00, 0, 0, 0, 0, 0x02], 0x2a, 12_000), // water off + pads low
+    ([0x0d, 0x00, 0x00, 0, 0, 0, 0, 0x02], 0x2a, 15_000), // idle pump + pads low
+    ([0x0d, 0x00, 0x00, 0, 0, 0, 0, 0x02], 0x4b, 65_000), // scrub + pads medium
+    ([0x0d, 0x64, 0x00, 0, 0, 0, 0, 0x02], 0xd6, 10_000), // scrub + pads high
+    ([0x0d, 0x64, 0x00, 0, 0, 0, 0, 0x02], 0x00, 8_000),  // pads off
+    ([0x0e, 0x00, 0x00, 0x78, 0, 0, 0x01, 0x02], 0x00, 1_200_000), // dock drying fan (20 min)
+];
+
+/// The wash step active at `elapsed_ms` into the cycle, or None once it is over.
+fn wash_step(elapsed_ms: u64) -> Option<&'static ([u8; 8], u8, u64)> {
+    let mut acc = 0u64;
+    for s in WASH_STEPS {
+        acc += s.2;
+        if elapsed_ms < acc {
+            return Some(s);
+        }
+    }
+    None
+}
+
 fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
     let mut tick: u64 = 0;
     let mut mbuf = [0u8; 64];
+    let mut wash_start_ms: u64 = 0; // 0 = not running a wash cycle
     // Dock off-pulse: the base station keeps its pump/fan running until told to
     // stop, so when /set_station returns to 0 we send the idle 0x26 a few times to
     // actively stop it (then go quiet so parked-mode RGB is undisturbed).
@@ -275,42 +306,69 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
         if tick % 25 == 5 {
             send(&w, 0x02, &[0x21]); // SetLED / heartbeat
         }
-        if tick % 50 == 10 {
-            // SetCleaning `[side, main, fan, mop, mode, 0]` (byte[3] = rotating mop
-            // pads). Idle keeps ava's exact frame; any commanded actuator switches to
-            // vacuum mode (0x03). (The MCU "active mode" byte does NOT gate the ToF -
-            // that was a red herring; the ToF just needs ava fully dead. See docs/MCU
-            // + the dreame-vacuum-livestream phase3 notes.)
-            let (sb, mb, fan, mop) = (
-                sh.side_brush.load(Ordering::Relaxed),
-                sh.main_brush.load(Ordering::Relaxed),
-                sh.fan.load(Ordering::Relaxed),
-                sh.mop.load(Ordering::Relaxed),
-            );
-            let p = if sb | mb | fan | mop == 0 {
-                [0x00, 0x01, 0x00, 0x00, 0x00, 0x00]
-            } else {
-                [sb, mb, fan, mop, 0x03, 0x00]
-            };
-            send(&w, 0x01, &p);
+        // Base-station wash cycle: station=2 replays ava's captured cycle (WASH_STEPS),
+        // driving both the mop pads (SetCleaning below) and the pump/fan (0x26 below).
+        // After the last step the driver returns station to 0 (idle + off-pulse). Sent
+        // in both modes since the robot is parked while docked.
+        let mut station = sh.station.load(Ordering::Relaxed);
+        let (mut wash_pump, mut wash_pad): (Option<[u8; 8]>, Option<u8>) = (None, None);
+        if station == 2 {
+            if wash_start_ms == 0 {
+                wash_start_ms = sh.now_ms();
+            }
+            match wash_step(sh.now_ms().saturating_sub(wash_start_ms)) {
+                Some(s) => {
+                    wash_pump = Some(s.0);
+                    wash_pad = Some(s.1);
+                }
+                None => {
+                    sh.station.store(0, Ordering::Relaxed); // cycle finished
+                    station = 0;
+                    wash_start_ms = 0;
+                }
+            }
+        } else {
+            wash_start_ms = 0;
         }
-        // Base-station (dock) command via 0x26 - sent in BOTH modes, because the
-        // robot is normally parked (observe) while docked, so /set_station must work
-        // when parked. station=0 falls through to the nav-mode idle 0x26 heartbeat.
-        let station = sh.station.load(Ordering::Relaxed);
         if station == 0 && prev_station != 0 {
             off_pulse = 5; // just switched off -> pulse the idle 0x26 to stop the dock
         }
         prev_station = station;
-        if tick % 50 == 30 {
-            let p: Option<[u8; 8]> = match station {
-                1 => Some([0x0e, 0x00, 0x00, 0x78, 0x00, 0x00, 0x01, 0x02]), // dry (dock fan)
-                2 => Some([0x0d, 0x64, 0x46, 0x00, 0x00, 0x00, 0x00, 0x02]), // wash: byte1 pump rate, byte2 water
-                _ if off_pulse > 0 => {
-                    off_pulse -= 1;
-                    Some([0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02]) // idle -> dock off
+        if tick % 50 == 10 {
+            // SetCleaning `[side, main, fan, mop, mode, 0]`. During a wash the cycle
+            // drives the mop pads (mode 00); otherwise the commanded actuator levels
+            // (any set -> vacuum mode 0x03; idle keeps ava's exact frame). The MCU
+            // active-mode byte does NOT gate the ToF (red herring) - see docs/MCU.
+            let p = if let Some(pad) = wash_pad {
+                [0x00, 0x01, 0x00, pad, 0x00, 0x00]
+            } else {
+                let (sb, mb, fan, mop) = (
+                    sh.side_brush.load(Ordering::Relaxed),
+                    sh.main_brush.load(Ordering::Relaxed),
+                    sh.fan.load(Ordering::Relaxed),
+                    sh.mop.load(Ordering::Relaxed),
+                );
+                if sb | mb | fan | mop == 0 {
+                    [0x00, 0x01, 0x00, 0x00, 0x00, 0x00]
+                } else {
+                    [sb, mb, fan, mop, 0x03, 0x00]
                 }
-                _ => None,
+            };
+            send(&w, 0x01, &p);
+        }
+        // Base-station (dock) 0x26 - sent in BOTH modes (robot parked while docked).
+        if tick % 50 == 30 {
+            let p: Option<[u8; 8]> = if let Some(pump) = wash_pump {
+                Some(pump)
+            } else {
+                match station {
+                    1 => Some([0x0e, 0x00, 0x00, 0x78, 0x00, 0x00, 0x01, 0x02]), // dry (dock fan)
+                    _ if off_pulse > 0 => {
+                        off_pulse -= 1;
+                        Some([0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02]) // idle -> dock off
+                    }
+                    _ => None,
+                }
             };
             if let Some(p) = p {
                 send(&w, 0x26, &p);
