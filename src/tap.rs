@@ -20,6 +20,20 @@ use crate::msg::{
     PoseWithCovariance, Twist, TwistWithCovariance, Vector3,
 };
 
+// --- LDS/odom raw debug (env W10_LDS_DEBUG=1) ---------------------------------
+// Dumps raw turret angle (fsa/lsa), sweep boundaries and yaw_cdeg to stderr with
+// wall-clock ms, so scan rotation can be correlated against odom rotation.
+fn lds_dbg() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("W10_LDS_DEBUG").as_deref() == Ok("1"))
+}
+fn dbg_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
 /// A finished message from a reader thread, ready to publish.
 pub enum Tap {
     Odom(Box<Odometry>),
@@ -60,6 +74,9 @@ fn wrap_pi(a: f32) -> f32 {
 
 /// `Status20ms` (pose/velocity) + IMU yaw rate -> `nav_msgs/Odometry`.
 pub(crate) fn odom_from_status(s: &Status20ms, gyro_z_dps: f32) -> Odometry {
+    if lds_dbg() {
+        eprintln!("YAW {} cdeg={} x={} y={}", dbg_ms(), s.yaw_cdeg, s.x_mm10, s.y_mm10);
+    }
     let x_m = s.x_mm10 as f64 / 10.0 / 1000.0;
     let y_m = s.y_mm10 as f64 / 10.0 / 1000.0;
     let yaw = (s.yaw_deg() as f64).to_radians();
@@ -190,9 +207,15 @@ impl Sweep {
         let mut done = None;
         if let Some(pf) = self.prev_fsa {
             if (pf as i32 - f.fsa as i32) > FSA_WRAP {
+                if lds_dbg() {
+                    eprintln!("SWEEP {} pts={} last_fsa={} new_fsa={}", dbg_ms(), self.pts.len(), pf, f.fsa);
+                }
                 done = build_scan(&self.pts);
                 self.pts.clear();
             }
+        }
+        if lds_dbg() {
+            eprintln!("LDS {} fsa={} lsa={} arc={}", dbg_ms(), f.fsa, f.lsa, f.lsa.wrapping_sub(f.fsa));
         }
         self.prev_fsa = Some(f.fsa);
         for k in 0..f.samples.len() {

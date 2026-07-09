@@ -34,13 +34,13 @@
 //! low 15 bits are 0 in that case); otherwise the raw value is the distance in mm
 //! (observed 0.34-8.4 m).
 //!
-//! IMPORTANT coverage caveat: the tapped ttyS3 stream is a FIXED ~126 deg rear
-//! arc (`fsa` stays in ~226-352 deg), NOT a full circle. Verified identical under
-//! both manual control and active SLAM navigation (a return-to-dock run, robot
-//! driving and turning): the arc does not rotate with heading or widen, and the
-//! whole stream is type-0x03 packets in this arc. Active navigation does not help
-//! -- this serial link simply carries no full-360 feed. The framing/scaling below
-//! are unaffected; only the angular coverage is partial.
+//! COVERAGE: the ttyS3 stream is a FULL 360 deg scan. `fsa` cycles continuously
+//! ~41202 -> ~63781 (one revolution ~= 22580 fsa units, no silent gap) then
+//! resets, at ~5.2 rev/s. The earlier "FIXED ~126 deg rear arc, fsa in 226-352
+//! deg" note was an artifact of decoding with `LDS_ANGLE_FULL = 65536`: that
+//! scale maps the 41202..63781 span onto 226..350 deg (a 124 deg wedge) and
+//! makes the scan under-rotate 2.9x vs odom. Corrected via `LDS_ANGLE_FULL`
+//! (see below); the scan is a normal full circle.
 //!
 //! `no_std` and allocation-free, so the in-`ava` tap and the SangamIO driver can
 //! share it. The scanner keys on the 4-byte header + fixed length (the trailing
@@ -54,8 +54,13 @@ pub const LDS_TYPE: u8 = 0x03;
 pub const LDS_SAMPLES: usize = 8;
 /// Total packet length in bytes.
 pub const LDS_FRAME_LEN: usize = 40;
-/// Full-circle value of the u16 angle fields (working assumption: 65536 == 360deg).
-pub const LDS_ANGLE_FULL: u32 = 0x1_0000;
+/// Full-circle value of the u16 angle fields. Measured empirically: one turret
+/// revolution spans ~22580 fsa units. `fsa` cycles ~41202 -> ~63781 continuously
+/// (no silent gap) then resets to ~41202 -- it is NOT a free-running 0..65536
+/// counter. Confirmed against odom: with 65536 the scan under-rotated 2.9x
+/// (22580/65536 = 0.345) and the full 360deg scan was compressed into a ~124deg
+/// wedge. The 22580 value tracks the robot 1:1 and restores the full circle.
+pub const LDS_ANGLE_FULL: u32 = 22580;
 /// Distance bit that marks an invalid / no-return sample.
 pub const LDS_DIST_INVALID: u16 = 0x8000;
 
