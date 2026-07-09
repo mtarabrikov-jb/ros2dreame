@@ -24,7 +24,11 @@ DRIVING/PARKED state, and bumper/cliff/dock indicators.
 
 The control buttons publish to the topics ros2dreame subscribes to:
 
-- Fan / Side brush / Main brush ON = `std_msgs/UInt8 {data: 100}`, OFF = `{data: 0}`.
+- Fan / Side brush / Main brush / Mop ON = `std_msgs/UInt8 {data: 100}`, OFF = `{data: 0}`.
+  Mop = the two rotating mop pads (`/set_mop`); the robot itself has no water pump.
+- Dock DRY / WASH / OFF = `/set_station` `std_msgs/UInt8` `{data: 1 / 2 / 0}` - the
+  base station's mop-drying fan (1) and mop-washing water pump (2). **WASH pumps
+  water into the base** - only use it docked and attended.
 - Turret ON = `std_msgs/Bool {data: true}` (drive state: `/scan` + IR, RGB drops);
   OFF = `{data: false}` (park state: both cameras). A turret click pauses the
   `W10_AUTO` motion auto-switch.
@@ -44,3 +48,8 @@ settings (defaults 0.15 m/s / 0.6 rad/s).
   auto-load them, just re-pick the topic in the panel.
 - `/camera` (RGB) streams in the parked state; `/camera_ir` (IR) streams while
   driving and parked.
+- The **battery draw (A)** plot shows `/battery.current` (signed: + = discharge).
+  The MCU has no per-fan current sensor, so the suction fan is monitored here as
+  its share of the total draw: ~0.3 A idle -> ~0.9 A with `/set_fan 100` (a ~0.6 A
+  jump). Turn the brushes off and stay parked to read the fan's draw in isolation;
+  the only fan-specific MCU signal otherwise is the `fan_overcurrent` fault flag.

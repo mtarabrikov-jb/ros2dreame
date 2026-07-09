@@ -48,6 +48,22 @@
       "advancedView": true,
       "value": "{ \"data\": 0 }"
     },
+    "Publish!mopon": {
+      "topicName": "/set_mop",
+      "datatype": "std_msgs/msg/UInt8",
+      "buttonText": "Mop ON (pads spin)",
+      "buttonColor": "#43a047",
+      "advancedView": true,
+      "value": "{ \"data\": 100 }"
+    },
+    "Publish!mopoff": {
+      "topicName": "/set_mop",
+      "datatype": "std_msgs/msg/UInt8",
+      "buttonText": "Mop OFF",
+      "buttonColor": "#e53935",
+      "advancedView": true,
+      "value": "{ \"data\": 0 }"
+    },
     "Publish!turreton": {
       "topicName": "/set_turret",
       "datatype": "std_msgs/msg/Bool",
@@ -72,6 +88,30 @@
       "advancedView": true,
       "value": "{ \"data\": true }"
     },
+    "Publish!dockdry": {
+      "topicName": "/set_station",
+      "datatype": "std_msgs/msg/UInt8",
+      "buttonText": "Dock DRY (fan)",
+      "buttonColor": "#fb8c00",
+      "advancedView": true,
+      "value": "{ \"data\": 1 }"
+    },
+    "Publish!dockwash": {
+      "topicName": "/set_station",
+      "datatype": "std_msgs/msg/UInt8",
+      "buttonText": "Dock WASH (water!)",
+      "buttonColor": "#1e88e5",
+      "advancedView": true,
+      "value": "{ \"data\": 2 }"
+    },
+    "Publish!dockoff": {
+      "topicName": "/set_station",
+      "datatype": "std_msgs/msg/UInt8",
+      "buttonText": "Dock OFF",
+      "buttonColor": "#e53935",
+      "advancedView": true,
+      "value": "{ \"data\": 0 }"
+    },
     "Teleop!drive": {
       "topic": "/cmd_vel",
       "publishRate": 5,
@@ -92,6 +132,17 @@
         { "value": "/current/wheel_right.data", "enabled": true, "timestampMethod": "receiveTime" },
         { "value": "/current/main_brush.data", "enabled": true, "timestampMethod": "receiveTime" },
         { "value": "/current/side_brush.data", "enabled": true, "timestampMethod": "receiveTime" }
+      ],
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    },
+    "Plot!battcurrent": {
+      "paths": [
+        { "value": "/battery.current", "enabled": true, "timestampMethod": "receiveTime", "label": "battery draw (A)" }
       ],
       "showLegend": true,
       "legendDisplay": "floating",
@@ -167,9 +218,24 @@
             "first": { "direction": "row", "first": "Publish!mainon", "second": "Publish!mainoff" },
             "second": {
               "direction": "column",
-              "splitPercentage": 55,
-              "first": { "direction": "row", "first": "Publish!turreton", "second": "Publish!turretoff" },
-              "second": "Publish!auto"
+              "splitPercentage": 30,
+              "first": { "direction": "row", "first": "Publish!mopon", "second": "Publish!mopoff" },
+              "second": {
+                "direction": "column",
+                "splitPercentage": 55,
+                "first": { "direction": "row", "first": "Publish!turreton", "second": "Publish!turretoff" },
+                "second": {
+                  "direction": "column",
+                  "splitPercentage": 40,
+                  "first": "Publish!auto",
+                  "second": {
+                    "direction": "column",
+                    "splitPercentage": 34,
+                    "first": "Publish!dockdry",
+                    "second": { "direction": "row", "first": "Publish!dockwash", "second": "Publish!dockoff" }
+                  }
+                }
+              }
             }
           }
         }
@@ -182,7 +248,7 @@
       "second": {
         "direction": "column",
         "splitPercentage": 48,
-        "first": "Plot!currents",
+        "first": { "direction": "column", "splitPercentage": 62, "first": "Plot!currents", "second": "Plot!battcurrent" },
         "second": {
           "direction": "row",
           "splitPercentage": 35,
