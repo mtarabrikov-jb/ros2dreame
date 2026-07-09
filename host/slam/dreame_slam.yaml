@@ -1,5 +1,5 @@
 # slam_toolbox online_async for ros2dreame (Dreame W10). Frames match ros2dreame:
-# odom -> base_link (/tf) -> laser (/tf_static). LDS is a ~123 deg REAR arc, 8 m.
+# odom -> base_link (/tf) -> laser (/tf_static). LDS is a full 360 deg scan, 8 m.
 slam_toolbox:
   ros__parameters:
     solver_plugin: solver_plugins::CeresSolver
@@ -9,6 +9,11 @@ slam_toolbox:
     ceres_dogleg_type: TRADITIONAL_DOGLEG
     ceres_loss_function: None
     mode: mapping
+    # Auto-load the saved map on startup (make save-map writes it here), so a
+    # container recreate / slam restart continues the same map. Absent file
+    # (first run, before any save) -> slam_toolbox warns and starts fresh.
+    map_file_name: /cfg/maps/dreame_map
+    map_start_pose: [0.0, 0.0, 0.0]
     map_frame: map
     base_frame: base_link
     odom_frame: odom

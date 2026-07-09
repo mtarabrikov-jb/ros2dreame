@@ -13,6 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-jazzy-rqt-tf-tree \
         ros-jazzy-teleop-twist-keyboard \
         ros-jazzy-image-transport-plugins \
+        ros-jazzy-slam-toolbox \
+        ros-jazzy-nav2-map-server \
+        ros-jazzy-foxglove-bridge \
     && rm -rf /var/lib/apt/lists/*
 
 # Source ROS in every shell (docker exec bypasses the entrypoint).
