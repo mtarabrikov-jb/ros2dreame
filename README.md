@@ -35,9 +35,15 @@ Working, ava OFF, one binary (verified on the robot -> a Jazzy container):
   levels) - handy for a Foxglove / rqt dashboard
 - `/cmd_vel` `geometry_msgs/Twist` -> `MotorCtrl` (teleop; gated by watchdog +
   clamp + cliff/bump hazard). Verified: drove the robot 7.6 cm from the container.
+- **actuator control** `/set_{fan,side_brush,main_brush,water_pump}` `std_msgs/UInt8`
+  (0 = off, ~1-150 = level -> the SetCleaning frame). Publish from a GUI to toggle.
+- **turret control** `/set_turret` `std_msgs/Bool`: true = drive state (turret +
+  `/scan` + IR, RGB drops), false = park state (turret off, both cameras). In
+  `W10_AUTO` it takes manual control (pauses the motion auto-switch); `/set_auto`
+  `Bool` true resumes auto. Good for GUI on/off buttons (Foxglove Button panel).
 
 Planned next:
-- raw dock-IR + motor currents; actuator services (suction / brushes / pump / LED)
+- raw dock-IR; LED control
 
 ## Data sources
 

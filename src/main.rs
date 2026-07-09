@@ -150,13 +150,15 @@ fn main() {
             let s = sh.clone();
             thread::spawn(move || {
                 const HOLD_MS: u64 = 3000; // stay in DRIVING this long after motion stops
-                let mut parked = s.is_parked();
                 loop {
-                    let want = s.idle_move_ms() > HOLD_MS;
-                    if want != parked {
-                        s.set_parked(want);
-                        parked = want;
-                        log::info!("auto: {}", if want { "PARKED (turret off; RGB+IR)" } else { "DRIVING (turret on; /scan+IR)" });
+                    // Skip while paused (a /set_turret click took manual control);
+                    // use is_parked() as truth since manual control can change it.
+                    if !s.auto_paused() {
+                        let want = s.idle_move_ms() > HOLD_MS;
+                        if want != s.is_parked() {
+                            s.set_parked(want);
+                            log::info!("auto: {}", if want { "PARKED (turret off; RGB+IR)" } else { "DRIVING (turret on; /scan+IR)" });
+                        }
                     }
                     thread::sleep(std::time::Duration::from_millis(400));
                 }
@@ -342,6 +344,29 @@ fn main() {
             });
         }
         log::info!("actuators: subscribed (/set_fan /set_side_brush /set_main_brush /set_water_pump)");
+
+        // Manual turret + auto toggle (std_msgs/Bool, for GUI on/off buttons).
+        // /set_turret true = drive state (turret + /scan, IR; RGB drops), false =
+        // park state (both cameras). It pauses W10_AUTO; /set_auto true resumes it.
+        for (name, set) in [
+            ("set_turret", direct::Shared::set_turret as fn(&direct::Shared, bool)),
+            ("set_auto", direct::Shared::set_auto),
+        ] {
+            let topic = node
+                .create_topic(&Name::new("/", name).unwrap(), MessageTypeName::new("std_msgs", "Bool"), &sensor_qos())
+                .expect("bool topic");
+            let sub = node
+                .create_subscription::<msg::Bool>(&topic, Some(sensor_qos()))
+                .expect("bool sub");
+            let d = drive.clone();
+            thread::spawn(move || loop {
+                match sub.take() {
+                    Ok(Some((m, _))) => set(&d, m.data),
+                    _ => thread::sleep(std::time::Duration::from_millis(20)),
+                }
+            });
+        }
+        log::info!("manual: subscribed (/set_turret /set_auto)");
     }
 
     // Static base_link -> laser, published once (transient-local keeps it for

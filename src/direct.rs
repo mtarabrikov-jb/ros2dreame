@@ -44,6 +44,9 @@ pub struct Shared {
     observe: AtomicBool,
     // drive command (for a future /cmd_vel), gated by watchdog + clamp + hazard
     enabled: AtomicBool,
+    // W10_AUTO: paused while the user drives things manually (a /set_turret click
+    // takes over park/drive; /set_auto true resumes motion-based auto-switching).
+    auto_paused: AtomicBool,
     linear_bits: AtomicU32,
     rot_bits: AtomicU32,
     last_cmd_ms: AtomicU64,
@@ -116,6 +119,21 @@ impl Shared {
             self.main_brush.load(Ordering::Relaxed),
             self.pump.load(Ordering::Relaxed),
         )
+    }
+    /// Manual turret toggle from the GUI: on -> drive state (turret spins, /scan,
+    /// cameras -> ToF/IR, RGB wedged); off -> park state (turret off, RGB
+    /// un-wedge reset, both cameras). Pauses the W10_AUTO motion auto-switch so
+    /// the manual choice sticks; publish /set_auto true to resume auto.
+    pub fn set_turret(&self, on: bool) {
+        self.auto_paused.store(true, Ordering::Relaxed);
+        self.set_parked(!on);
+    }
+    /// Resume (true) / pause (false) the W10_AUTO motion-based auto-switch.
+    pub fn set_auto(&self, on: bool) {
+        self.auto_paused.store(!on, Ordering::Relaxed);
+    }
+    pub fn auto_paused(&self) -> bool {
+        self.auto_paused.load(Ordering::Relaxed)
     }
 }
 
@@ -359,6 +377,7 @@ pub fn run(mcu_path: &str, lds_path: &str, observe: bool, tx: Sender<Tap>) -> Ar
         lidar_on: AtomicBool::new(!observe && std::env::var_os("W10_NO_TURRET").is_none()),
         observe: AtomicBool::new(observe),
         enabled: AtomicBool::new(false),
+        auto_paused: AtomicBool::new(false),
         last_move_ms: AtomicU64::new(0),
         linear_bits: AtomicU32::new(0),
         rot_bits: AtomicU32::new(0),
