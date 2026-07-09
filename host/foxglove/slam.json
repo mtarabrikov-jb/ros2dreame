@@ -29,10 +29,31 @@
       "layers": {
         "grid": { "layerId": "foxglove.Grid", "visible": true, "size": 20, "divisions": 20 }
       }
+    },
+    "Teleop!drive": {
+      "topic": "/cmd_vel",
+      "publishRate": 5,
+      "upButton": { "field": "linear-x", "value": 0.15 },
+      "downButton": { "field": "linear-x", "value": -0.15 },
+      "leftButton": { "field": "angular-z", "value": 0.6 },
+      "rightButton": { "field": "angular-z", "value": -0.6 }
+    },
+    "Image!ir": {
+      "imageMode": { "imageTopic": "/camera_ir/image_raw/compressed" }
     }
   },
   "globalVariables": {},
   "userNodes": {},
   "playbackConfig": { "speed": 1 },
-  "layout": "3D!slam"
+  "layout": {
+    "direction": "row",
+    "splitPercentage": 68,
+    "first": "3D!slam",
+    "second": {
+      "direction": "column",
+      "splitPercentage": 42,
+      "first": "Teleop!drive",
+      "second": "Image!ir"
+    }
+  }
 }
