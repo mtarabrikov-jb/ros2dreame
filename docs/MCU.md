@@ -44,7 +44,7 @@ mop wash/dry from Valetudo (`MopDockClean`/`MopDockDryManualTriggerCapability`):
 |---|---|---|---|---|---|---|---|---|
 | `14`/`64` | 00 | 00 | 00 | 00 | 00 | 00 | 02 | idle heartbeat |
 | `0e` | 00 | 00 | **78** | 00 | 00 | **01** | 02 | **dry** (dock fan): byte3=0x78 time, byte6=0x01 on |
-| `0d` | 00 | **46** | 00 | 00 | 00 | 00 | 02 | **wash** (dock water pump): byte2=0x46 water; byte1->0x64 = level |
+| `0d` | **64** | **46** | 00 | 00 | 00 | 00 | 02 | **wash** (dock water pump): byte1=0x64 pump rate, byte2=0x46 water (byte1=0 = slow) |
 
 `src/direct.rs` sends these when `station` is set (`/set_station` `0`/`1`/`2`). The
 idle heartbeat keeps `byte7=0x04` (the mcud value, benign); the dock commands use
