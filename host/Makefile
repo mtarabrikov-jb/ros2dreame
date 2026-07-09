@@ -20,8 +20,8 @@ up:
 	-xhost +local: >/dev/null 2>&1 || true
 	$(DC) up -d
 	@echo ">> up. Try: make slam  |  make foxglove  |  make rviz  |  make steer  |  make logs"
-all: up rviz rqt steer image foxglove   ## up + every GUI window + foxglove bridge
-	@echo ">> launched: rviz, rqt, robot-steering, image view, foxglove_bridge (ws://localhost:8765)"
+all: up slam rqt steer image foxglove   ## up + full stack: slam (map+rviz), rqt, steer, image, foxglove
+	@echo ">> launched: slam+rviz (map), rqt, robot-steering, image view, foxglove_bridge (ws://localhost:8765)"
 down:
 	$(DC) down
 logs:                       ## follow all container stdout (slam, foxglove, rviz, ...)
