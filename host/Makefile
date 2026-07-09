@@ -7,7 +7,7 @@ SRC  := source /opt/ros/jazzy/setup.bash &&
 GUI  := $(DC) exec -d $(SVC) bash -c   # detached: GUI opens, make returns
 RUN  := $(DC) exec $(SVC) bash -c      # attached (stdin): terminal tools
 
-.PHONY: build up all down shell topics rviz rqt steer image tf teleop foxglove
+.PHONY: build up all down shell topics rviz rqt steer image tf teleop foxglove slam
 build:
 	$(DC) build
 up:
@@ -27,6 +27,12 @@ foxglove:                   ## foxglove_bridge WebSocket (ws://localhost:8765) -
 	-$(DC) exec -T $(SVC) pkill -9 -f '[f]oxglove_bridge' 2>/dev/null || true
 	$(GUI) '$(SRC) ros2 run foxglove_bridge foxglove_bridge --ros-args -p port:=8765 -p address:=0.0.0.0'
 	@echo ">> foxglove_bridge on ws://localhost:8765 -- open app.foxglove.dev, connect, import host/foxglove/ros2dreame.json"
+slam:                       ## slam_toolbox live map + rviz (turret must spin for /scan)
+	-$(DC) exec -T $(SVC) bash -c 'ros2 pkg prefix slam_toolbox >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq ros-jazzy-slam-toolbox)'
+	$(GUI) '$(SRC) ros2 launch slam_toolbox online_async_launch.py slam_params_file:=/cfg/slam/dreame_slam.yaml'
+	$(GUI) '$(SRC) rviz2 -d /cfg/rviz/slam.rviz'
+	@echo ">> slam_toolbox + rviz up. /scan needs the turret spinning (Foxglove Turret ON, or make steer + drive)."
+	@echo ">> Foxglove: import host/foxglove/slam.json (3D panel: /map + /scan + TF). Drive to grow the map."
 rviz:                       ## /scan /odom /tf + pose
 	$(GUI) '$(SRC) rviz2 -d /cfg/rviz/dreame.rviz'
 rqt:                        ## everything: topics, images, plots, publisher

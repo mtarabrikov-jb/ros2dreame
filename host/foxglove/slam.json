@@ -1,0 +1,38 @@
+{
+  "configById": {
+    "3D!slam": {
+      "cameraState": {
+        "distance": 8,
+        "perspective": true,
+        "phi": 25,
+        "thetaOffset": 45,
+        "target": [0, 0, 0],
+        "targetOffset": [0, 0, 0],
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "followTf": "base_link",
+      "scene": { "enableStats": false },
+      "transforms": {},
+      "topics": {
+        "/map": { "visible": true },
+        "/scan": {
+          "visible": true,
+          "pointSize": 4,
+          "colorMode": "flat",
+          "flatColor": "#00ff66"
+        },
+        "/odom": { "visible": true }
+      },
+      "layers": {
+        "grid": { "layerId": "foxglove.Grid", "visible": true, "size": 20, "divisions": 20 }
+      }
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": { "speed": 1 },
+  "layout": "3D!slam"
+}

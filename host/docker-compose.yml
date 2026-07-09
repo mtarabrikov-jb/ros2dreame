@@ -32,4 +32,5 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ./fastdds_no_shm.xml:/cfg/fastdds_no_shm.xml:ro
       - ../rviz:/cfg/rviz:ro
+      - ./slam:/cfg/slam:ro
     command: sleep infinity

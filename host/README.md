@@ -28,7 +28,8 @@ make down      # stop
   - **Plot** - graph `/imu`, `/battery/percentage`, `/motor_currents/data[2]`
     (the main-brush current), etc.
   - **Message Publisher** - publish `/set_fan` `/set_main_brush` `/set_side_brush`
-    `/set_water_pump` (`std_msgs/UInt8`) to run the actuators.
+    `/set_mop` (`std_msgs/UInt8`) to run the actuators, or `/set_station` (0/1/2)
+    for the dock.
 - **`make image`** - just the camera viewer. **`make tf`** - the TF tree.
 - **`make rviz`** - the spatial view (laser scan, odometry, frames).
 
@@ -40,6 +41,22 @@ make down      # stop
   cliff/bump or if commands stop for 500 ms).
 - **`make teleop`** - keyboard teleop in the current terminal (`i/j/k/l`, space =
   stop). Needs the robot in nav mode.
+
+## Mapping (SLAM)
+
+**`make slam`** runs `slam_toolbox` on `/scan` + the TF chain ros2dreame already
+publishes (`odom -> base_link -> laser`) and opens rviz with `rviz/slam.rviz` (the
+`/map` occupancy grid + live `/scan`, fixed frame `map`). It builds a map live.
+
+- **The turret must be spinning** for `/scan` (parked = no scan): click **Turret
+  ON** in Foxglove, or `make steer` and drive.
+- **Drive around** to grow the map - a stationary robot only maps the visible arc.
+- **Foxglove:** import `foxglove/slam.json` (a 3D panel: `/map` + `/scan` + TF).
+- ros2dreame already does the job the makerspet tutorial splits across four nodes
+  (`vacuum_bridge` + `robot_state_publisher` + `ekf`): it publishes `/scan` and the
+  full `odom -> base_link -> laser` TF, so only `slam_toolbox` is added on top.
+- Caveat: the W10 LDS is a **~123 deg rear arc** (not 360), so the map is coarser
+  than a 360 lidar (harder loop-closure, more drift). Config: `slam/dreame_slam.yaml`.
 
 ## Notes
 
