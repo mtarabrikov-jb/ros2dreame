@@ -84,22 +84,26 @@ case "${1:-status}" in
         ava_off
         sleep 1
         mkdir -p /data/log
-        IR=""
+        IR=""; [ "$1" = observe ] || IR="W10_CAM_IR=1"
+        # ORDER MATTERS in observe: ros2dreame drives the MCU and emits the
+        # camera-AI-reset frame 0x1d [0x05,0x00], which un-wedges a (previously
+        # turret-wedged) RGB isp0 - but only while the camera is still CLOSED and
+        # then re-opened. So start ros2dreame FIRST, let the reset land, THEN open
+        # w10-camd on the now-clean isp0. This is what makes RGB recoverable
+        # off-dock (no ava/reboot reprime). nav uses the ToF/isp1 path (no reset).
+        echo ">> start ros2dreame ($1)"
+        setsid env RUST_LOG=info $OBS $IR "$R2D" >/data/log/ros2dreame.log 2>&1 </dev/null &
+        if [ "$1" = observe ]; then sleep 3; else sleep 1; fi
         if [ -x "$CAMD" ]; then
-            # ONE camera per mode (RGB=isp0, ToF=isp1 - separate ISPs). Both give a
-            # clean image with ava dead: observe -> RGB (/camera), nav -> ToF
-            # (/camera_ir, structured-light IR). RGB additionally needs the OV8856
-            # primed (by ava or a reboot) before the first parked capture.
-            if [ "$1" = observe ]; then CAMMODE=rgb; else CAMMODE=tof; IR="W10_CAM_IR=1"; fi
+            # ONE camera per mode (RGB=isp0, ToF=isp1 - separate ISPs), ava dead:
+            # observe -> RGB (/camera), nav -> ToF (/camera_ir, structured-light IR).
+            if [ "$1" = observe ]; then CAMMODE=rgb; else CAMMODE=tof; fi
             echo ">> start camera helper w10-camd ($CAMMODE)"
             setsid "$CAMD" "$CAMMODE" >/data/log/camd.log 2>&1 </dev/null &
-            sleep 2
+            sleep 3
         else
             echo "   (no w10-camd at $CAMD; cameras skipped)"
         fi
-        echo ">> start ros2dreame ($1)"
-        setsid env RUST_LOG=info $OBS $IR "$R2D" >/data/log/ros2dreame.log 2>&1 </dev/null &
-        sleep 3
         if pidof ros2dreame >/dev/null; then
             if [ "$1" = observe ]; then
                 echo ">> UP (ava OFF, OBSERVE). /odom /tf /camera (RGB), no /scan. Restore: direct-mode.sh restore"

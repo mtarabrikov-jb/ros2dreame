@@ -183,6 +183,17 @@ fn rx_loop(mut rd: File, w: Arc<Mutex<File>>, sh: Arc<Shared>, tx: Sender<Tap>) 
 fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
     let mut tick: u64 = 0;
     let mut mbuf = [0u8; 64];
+    // In observe (parked, turret off) ros2dreame emits the MCU camera-AI-reset
+    // frame `0x1d [0x05, 0x00]`. ava's node_signal::AIReset2ComProcess builds
+    // exactly this from a CAMERA_AI_RESET msg (byte0=0x00 = reset; 0x01 = enable,
+    // which is what nav sends). Sent with the camera CLOSED it un-wedges a
+    // turret-wedged RGB isp0 off-dock - no ava, no dock, no reboot (found by
+    // disassembling node_signal.so; verified end to end). One-shot: the RGB helper
+    // must open AFTER the reset lands. W10_CAM_SYNC_VAL overrides byte0;
+    // W10_NO_CAM_SYNC disables it.
+    let cam_sync = std::env::var_os("W10_NO_CAM_SYNC").is_none();
+    let cam_sync_val: u8 = std::env::var("W10_CAM_SYNC_VAL").ok()
+        .and_then(|s| s.parse().ok()).unwrap_or(0);
     while !sh.shutdown.load(Ordering::Relaxed) {
         let observe = sh.observe.load(Ordering::Relaxed);
         // SetLED / SetCleaning idle: harmless heartbeats ava always sends; keep
@@ -218,6 +229,9 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
                 if let Ok(mut f) = w.lock() {
                     let _ = f.write_all(&mbuf[..n]);
                 }
+            }
+            if cam_sync && tick % 50 == 40 {
+                send(&w, 0x1d, &[0x05, cam_sync_val]); // MCU camera-AI-reset -> un-wedge RGB isp0
             }
             tick = tick.wrapping_add(1);
             thread::sleep(Duration::from_millis(20));

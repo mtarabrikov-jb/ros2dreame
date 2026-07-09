@@ -63,9 +63,19 @@ with `ava` verifiably dead (freeze all four ava watchdogs, see below - an earlie
 - The disturbance **wedges isp0 persistently**: once the turret has spun, a plain
   reopen of `/dev/video2` keeps erroring (`size 0`) even after the turret stops,
   even with the sensor left idle during the turret, and even after a 60 s wait. It
-  clears only with an `ava` reprime (ava streaming RGB on isp0, on the dock) or a
-  reboot - not by waiting, reopening, a proactive stop-before-turret, or a VIN
-  driver unbind (which oopses the driver). Off-dock reprime is still unsolved.
+  does NOT clear by waiting, reopening, a proactive stop-before-turret, a VIN
+  driver unbind (which oopses the driver), the `resetsync` ioctl, or persistent
+  streaming.
+- **Off-dock un-wedge (SOLVED):** send the MCU **camera-AI-reset** frame
+  `0x1d [0x05, 0x00]` with the turret off and the camera CLOSED, then re-open the
+  RGB camera - isp0 recovers, RGB streams clean, no `ava`/dock/reboot needed. Byte0
+  must be **`0x00`** (reset); `0x01` (what nav sends) does NOT clear it. Found by
+  disassembling `node_signal.so`: `AvaNodeSignal::AIReset2ComProcess(ava_camera_ai_reset_msg*)`
+  builds `CastComMsg(0x1d, {0x05, byte0}, 2)` (siblings: `{0x04,..}` = stereo cam,
+  `{0x01,..}` = ToF). `ros2dreame` emits this in observe mode (see `direct.rs`
+  `cam_sync`); `direct-mode.sh observe` starts ros2dreame FIRST so the reset lands
+  before `w10-camd` opens video2. Verified end to end (real 672x504 RGB recovered
+  from a turret-wedged isp0).
 - The IR/ToF sensor (`ofilm0092`, isp1 - a separate ISP + MIPI lane) is unaffected.
 
 So driving itself is fine for RGB: `W10_NO_TURRET=1` runs nav (drive-capable,

@@ -59,8 +59,11 @@ ring and publishes each frame as `sensor_msgs/CompressedImage`. No HTTP/MJPEG
 server, no `go2rtc`, no `ava_cam_relay` - frames go straight into ROS topics.
 
 - **RGB** (OV8856, /dev/video2, isp0): driven via the vendor `libsunxicamera.so`
-  (NV21 672x504). Needs the sensor primed (by `ava` or a reboot) and the **LDS
-  turret off** (spinning it wedges isp0) - runs in `observe` mode -> `/camera`.
+  (NV21 672x504). Runs in `observe` mode -> `/camera` (needs the **LDS turret
+  off** - spinning it wedges isp0). If it was wedged by a prior turret run,
+  `observe` un-wedges it off-dock (no `ava`/reboot) by sending the MCU
+  camera-AI-reset frame `0x1d [0x05,0x00]` before opening video2 - see
+  [docs/MCU.md](docs/MCU.md).
 - **IR/ToF** (ofilm0092 Sunny iToF, /dev/video1, isp1): driven with **raw V4L2**
   (MPLANE BG12 224x1558) + the ToF media pipeline + the sensor's i2c enable
   registers on `/dev/i2c-2` @0x3d (`libsunxicamera` is RGB-only and can't bring the
