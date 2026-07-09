@@ -59,7 +59,11 @@ pub struct Shared {
     side_brush: AtomicU8,
     main_brush: AtomicU8,
     fan: AtomicU8,
-    pump: AtomicU8,
+    mop: AtomicU8,
+    // Base-station function, driven via the 0x26 frame (0 = idle, 1 = dry the mop
+    // pads (dock fan), 2 = wash the mop pads (dock water pump)). Reverse-engineered
+    // by snooping ava's ttyS4 while triggering wash/dry from Valetudo.
+    station: AtomicU8,
 }
 
 impl Shared {
@@ -104,20 +108,28 @@ impl Shared {
     pub fn set_fan(&self, v: u8) {
         self.fan.store(v, Ordering::Relaxed);
     }
-    pub fn set_pump(&self, v: u8) {
-        self.pump.store(v, Ordering::Relaxed);
+    /// Rotating mop pads (the two spinning mop discs). SetCleaning byte[3]. The
+    /// robot has no water pump - only these pads; the base station's pump + drying
+    /// fan are separate (MIoT/dock, not this MCU).
+    pub fn set_mop(&self, v: u8) {
+        self.mop.store(v, Ordering::Relaxed);
+    }
+    /// Base-station function (0 = idle, 1 = dry, 2 = wash) -> the 0x26 frame.
+    /// 2 (wash) runs the dock water pump - do not leave it on unattended.
+    pub fn set_station(&self, v: u8) {
+        self.station.store(v, Ordering::Relaxed);
     }
     /// Turret (LDS) currently commanded on (driving) vs off (parked).
     pub fn turret_on(&self) -> bool {
         self.lidar_on.load(Ordering::Relaxed)
     }
-    /// Commanded actuator levels: (fan, side_brush, main_brush, pump).
+    /// Commanded actuator levels: (fan, side_brush, main_brush, mop).
     pub fn levels(&self) -> (u8, u8, u8, u8) {
         (
             self.fan.load(Ordering::Relaxed),
             self.side_brush.load(Ordering::Relaxed),
             self.main_brush.load(Ordering::Relaxed),
-            self.pump.load(Ordering::Relaxed),
+            self.mop.load(Ordering::Relaxed),
         )
     }
     /// Manual turret toggle from the GUI: on -> drive state (turret spins, /scan,
@@ -223,6 +235,7 @@ fn rx_loop(mut rd: File, w: Arc<Mutex<File>>, sh: Arc<Shared>, tx: Sender<Tap>) 
                         dock: t.dock_sta(),
                         bumper: t.left_bumper() || t.right_bumper(),
                         cliff: t.any_cliff(),
+                        fan_oc: t.fan_overcurrent(),
                     });
                 }
                 Msg::Battery(b) => {
@@ -258,21 +271,21 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
             send(&w, 0x02, &[0x21]); // SetLED / heartbeat
         }
         if tick % 50 == 10 {
-            // SetCleaning `[side, main, fan, pump, mode, 0]`. Idle keeps ava's
-            // exact frame; any commanded actuator switches to vacuum mode (0x03).
-            // (The MCU "active mode" byte does NOT gate the ToF - that was a red
-            // herring; the ToF just needs ava fully dead. See docs/MCU + the
-            // dreame-vacuum-livestream phase3 notes.)
-            let (sb, mb, fan, pump) = (
+            // SetCleaning `[side, main, fan, mop, mode, 0]` (byte[3] = rotating mop
+            // pads). Idle keeps ava's exact frame; any commanded actuator switches to
+            // vacuum mode (0x03). (The MCU "active mode" byte does NOT gate the ToF -
+            // that was a red herring; the ToF just needs ava fully dead. See docs/MCU
+            // + the dreame-vacuum-livestream phase3 notes.)
+            let (sb, mb, fan, mop) = (
                 sh.side_brush.load(Ordering::Relaxed),
                 sh.main_brush.load(Ordering::Relaxed),
                 sh.fan.load(Ordering::Relaxed),
-                sh.pump.load(Ordering::Relaxed),
+                sh.mop.load(Ordering::Relaxed),
             );
-            let p = if sb | mb | fan | pump == 0 {
+            let p = if sb | mb | fan | mop == 0 {
                 [0x00, 0x01, 0x00, 0x00, 0x00, 0x00]
             } else {
-                [sb, mb, fan, pump, 0x03, 0x00]
+                [sb, mb, fan, mop, 0x03, 0x00]
             };
             send(&w, 0x01, &p);
         }
@@ -316,12 +329,17 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
             send(&w, 0x14, if lidar { &[0x04, 0x01] } else { &[0x04, 0x00] });
         }
         if tick % 50 == 30 {
-            let p: &[u8] = if lidar {
-                &[0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04]
-            } else {
-                &[0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04]
+            // 0x26 also drives the base station (dock). Idle = the mcud heartbeat;
+            // station=1/2 sends the wash/dry command captured from ava (byte3=0x78 +
+            // byte6=0x01 = dry the pads / dock fan; byte2=0x46 = wash the pads / dock
+            // water pump). byte0 is a mode nibble, byte7=0x02. See docs/MCU.md.
+            let p: [u8; 8] = match sh.station.load(Ordering::Relaxed) {
+                1 => [0x0e, 0x00, 0x00, 0x78, 0x00, 0x00, 0x01, 0x02], // dry (dock fan)
+                2 => [0x0d, 0x00, 0x46, 0x00, 0x00, 0x00, 0x00, 0x02], // wash (dock pump)
+                _ if lidar => [0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04],
+                _ => [0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04],
             };
-            send(&w, 0x26, p);
+            send(&w, 0x26, &p);
         }
         if lidar && tick % 200 == 40 {
             send(&w, 0x1d, &[0x05, 0x01]); // laser enable re-pulse
@@ -385,7 +403,8 @@ pub fn run(mcu_path: &str, lds_path: &str, observe: bool, tx: Sender<Tap>) -> Ar
         side_brush: AtomicU8::new(0),
         main_brush: AtomicU8::new(0),
         fan: AtomicU8::new(0),
-        pump: AtomicU8::new(0),
+        mop: AtomicU8::new(0),
+        station: AtomicU8::new(0),
     });
 
     let rd = match open_serial(mcu_path, libc::B115200) {
@@ -417,9 +436,9 @@ pub fn run(mcu_path: &str, lds_path: &str, observe: bool, tx: Sender<Tap>) -> Ar
         let (sh, tx) = (sh.clone(), tx.clone());
         thread::spawn(move || {
             while !sh.shutdown.load(Ordering::Relaxed) {
-                let (fan, side_brush, main_brush, pump) = sh.levels();
+                let (fan, side_brush, main_brush, mop) = sh.levels();
                 if tx
-                    .send(Tap::State { turret: sh.turret_on(), fan, side_brush, main_brush, pump })
+                    .send(Tap::State { turret: sh.turret_on(), fan, side_brush, main_brush, mop })
                     .is_err()
                 {
                     return;

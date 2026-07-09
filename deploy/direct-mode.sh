@@ -127,7 +127,10 @@ case "${1:-status}" in
         sleep 1
         mkdir -p /data/log
         echo ">> start ros2dreame (auto; owns w10-camd)"
-        setsid env RUST_LOG=info W10_AUTO=1 W10_CAMD="$CAMD" "$R2D" >/data/log/ros2dreame.log 2>&1 </dev/null &
+        # W10_JPEG_Q / W10_IMG_MS keep the two JPEG streams light over WiFi. RustDDS
+        # has one network thread; full-quality frames block it and starve incoming
+        # /cmd_vel (the robot stops responding to drive). q35 @ ~5 fps drives reliably.
+        setsid env RUST_LOG=info W10_AUTO=1 W10_JPEG_Q="${W10_JPEG_Q:-35}" W10_IMG_MS="${W10_IMG_MS:-200}" W10_CAMD="$CAMD" "$R2D" >/data/log/ros2dreame.log 2>&1 </dev/null &
         sleep 3
         if pidof ros2dreame >/dev/null; then
             echo ">> UP (ava OFF, AUTO). drive -> /scan + IR; stop -> /camera (RGB) + /camera_ir. Restore: direct-mode.sh restore"

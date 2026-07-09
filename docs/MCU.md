@@ -31,6 +31,26 @@ sustains the protocol the way `ava` does. `src/direct.rs` replays that, ~50 Hz:
 Safety: on exit the driver sends a zero `MotorCtrl` so the motors stop; the
 hazard gate forces linear velocity to 0 whenever a cliff/bump is detected.
 
+## Base station (dock) control: the `0x26` frame
+
+The dock's **mop-drying fan** and **mop-washing water pump** live in the base
+station, not on the robot. The robot relays their commands to the dock over the
+charging contacts as the **`0x26`** MCU frame (8-byte payload). Reverse-engineered
+by disassembling `node_signal.so` (`AvaCleanDockProcess -> CastComMsg(0x26, buf, 8)`)
+and then snooping ava's `ttyS4` writes (LD_PRELOAD `write` hook) while triggering
+mop wash/dry from Valetudo (`MopDockClean`/`MopDockDryManualTriggerCapability`):
+
+| byte0 (mode) | 1 | 2 | 3 | 4 | 5 | 6 | 7 | meaning |
+|---|---|---|---|---|---|---|---|---|
+| `14`/`64` | 00 | 00 | 00 | 00 | 00 | 00 | 02 | idle heartbeat |
+| `0e` | 00 | 00 | **78** | 00 | 00 | **01** | 02 | **dry** (dock fan): byte3=0x78 time, byte6=0x01 on |
+| `0d` | 00 | **46** | 00 | 00 | 00 | 00 | 02 | **wash** (dock water pump): byte2=0x46 water; byte1->0x64 = level |
+
+`src/direct.rs` sends these when `station` is set (`/set_station` `0`/`1`/`2`). The
+idle heartbeat keeps `byte7=0x04` (the mcud value, benign); the dock commands use
+ava's `byte7=0x02`. No `0x25` frame is used on this dock. Only trigger `wash` (the
+water pump) when the robot is docked and attended - it pumps water into the base.
+
 ## What the MCU REPORTS (decoded -> ROS 2)
 
 - `Status20ms` (0x01, 20 ms): `left_vel`, `right_vel`, `yaw`, `pose_x/y` ->

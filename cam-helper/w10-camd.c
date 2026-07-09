@@ -152,6 +152,15 @@ static void publish_jpeg(struct cam *c, const unsigned char *jpg, int n, int ow,
                 c->idx, (unsigned long long)*frames, (unsigned long long)misses);
 }
 
+// JPEG quality, env-tunable (W10_JPEG_Q, default 80). Lower = smaller frames =
+// less WiFi/RTPS bandwidth so incoming /cmd_vel is not starved by the two
+// camera streams (RustDDS has one network thread; big JPEG fragments block it).
+static int jpeg_q(void) {
+    static int q = 0;
+    if (!q) { const char *e = getenv("W10_JPEG_Q"); q = e ? atoi(e) : 80; if (q < 1 || q > 99) q = 80; }
+    return q;
+}
+
 #define TOF_NBUF 4
 static void capture_tof(struct cam *c) {
     // W10_TOF_NOPIPE: skip re-running the media graph setup (links + subdev
@@ -231,7 +240,7 @@ static void capture_tof(struct cam *c) {
         }
         tof_to_gray((const uint16_t *)bp[b.index], -1, gray);
         ir_upscale(gray, TOF_W, IR_SUB, 2, big);
-        int n = jpeg_encode_gray(big, TOF_W * 2, IR_SUB * 2, 80, jpg);
+        int n = jpeg_encode_gray(big, TOF_W * 2, IR_SUB * 2, jpeg_q(), jpg);
         publish_jpeg(c, jpg, n, TOF_W * 2, IR_SUB * 2, &frames, misses);
         ioctl(fd, VIDIOC_QBUF, &b);
     }
@@ -265,9 +274,9 @@ static void capture(struct cam *c) {
         if (c->tof) {
             tof_to_gray((const uint16_t *)data, -1, gray);   // 224x173 grayscale
             ir_upscale(gray, TOF_W, IR_SUB, 2, big);         // -> 448x346
-            n = jpeg_encode_gray(big, TOF_W * 2, IR_SUB * 2, 80, jpg);
+            n = jpeg_encode_gray(big, TOF_W * 2, IR_SUB * 2, jpeg_q(), jpg);
         } else {
-            n = jpeg_encode_nv21((const unsigned char *)data, c->w, c->h, 80, jpg);
+            n = jpeg_encode_nv21((const unsigned char *)data, c->w, c->h, jpeg_q(), jpg);
         }
         Return(self, imgframe);
         if (n > 0 && (size_t)n <= R2C_MAX_JPEG && c->shm) {

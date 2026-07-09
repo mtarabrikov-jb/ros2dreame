@@ -59,13 +59,23 @@ pub const T_TRIGGERS: u8 = 0x00;
 pub const T_STATUS_20MS: u8 = 0x01;
 pub const T_STATUS_10MS: u8 = 0x02; // IMU
 pub const T_STATUS_100MS: u8 = 0x03;
+/// `0x05` @500ms - a 6-byte slow-status frame (not decoded into a Msg; low value).
+/// Partially reverse-engineered live on the W10 by A-B tests (fan/mop/main-brush
+/// toggles) and a discharge run:
+///   [0] = battery SoC % (tracked 88 -> 83 -> 81, matched `Battery::soc_pct`)
+///   [1..3] = a 16-bit LE frame counter (increments every frame, ~2 Hz)
+///   [3] = a slow value that rises as the battery discharges (172 @ 88% -> 177 @
+///         81%); NOT temperature (battery temp held 27.0 C the whole run) and NOT
+///         load (unaffected by fan/mop/brush) - likely a voltage/DoD/health metric
+///   [4] = 79, [5] = 106 - constant across every tested load and the discharge;
+///         unidentified (fixed config/calibration, or dock-charge/error-only fields)
 pub const T_STATUS_500MS: u8 = 0x05;
 pub const T_PING: u8 = 0x0F;
 pub const T_BATTERY: u8 = 0x2B;
 
 // Message type ids (to MCU).
 pub const TX_MOTOR_CTRL: u8 = 0x00; // <B f f>  flag, linear, rotational
-pub const TX_SET_CLEANING: u8 = 0x01; // <B B B B B>  fan/brush/pump levels
+pub const TX_SET_CLEANING: u8 = 0x01; // <B B B B B>  side/main/fan/mop levels + mode
 pub const TX_SET_LED: u8 = 0x02; // <B>  button LED state (also a heartbeat)
 
 // ===========================================================================
@@ -313,7 +323,7 @@ impl Status10ms {
 /// `pitch@0`/`roll@2` are small signed values (deci-degrees assumed; ~-80/+14 = a
 /// slight dock-ramp tilt) that shift under motion — offsets confirmed, units not.
 /// `load@8` is a signed load/current (near 0 at rest, ~1-23 vacuuming, ~27-343
-/// mopping — a pump/mop-load candidate). **`flags@10` is the consumables/attachment
+/// mopping — a mop-pad-load candidate; the robot has no water pump). **`flags@10` is the consumables/attachment
 /// bitfield: bit 0 = dustbin missing [verified] (1 when the bin is pulled, 0 when
 /// present, isolated by a bin in/out A-B test); the other bits track mop/tank (the
 /// byte read `0x12` with no mop and `0x00` with the mop attached) — those exact bit
@@ -324,7 +334,7 @@ pub struct Status100ms {
     pub roll_ddeg: i16,  // [2]
     pub left_current: i16,  // [4] [verified] ~0 at rest, ~300-430 spinning
     pub right_current: i16, // [6] [verified]
-    pub load: i16,          // [8] pump/mop-load current candidate
+    pub load: i16,          // [8] mop-pad-load current candidate (no pump on robot)
     pub flags: u8,          // [10] consumables/attachment bitfield
 }
 
@@ -502,15 +512,21 @@ impl Triggers {
     }
 }
 
-/// `0x2B` — battery/charge. `<H H h H h H>`.
-/// `0x2b` — battery/charge. `<H H h H h H>` (12 B on the W10). Verified live on
+/// `0x2B` — battery/charge. `<H h h H h H>`.
+/// `0x2b` — battery/charge. `<H h h H h H>` (12 B on the W10). Verified live on
 /// the dock (16.3 V / 25 °C / charge 19.9 V) and off-dock (283 mA discharge).
+/// `current_ma@2` is signed (+ discharge / - charge); an A-B fan toggle moved it
+/// ~470 -> ~1100 mA, confirming the suction fan draw is visible here (the MCU has
+/// no dedicated fan-current field - see `Triggers::fan_overcurrent`).
 /// **SOC@8 is a direct percent (0..100), not centi-percent** — reads 88% at
 /// 16.03 V and 100% full on the dock.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Battery {
     pub voltage_mv: u16,
-    pub current_ma: u16,
+    pub current_ma: i16, // signed: + = discharge (draw), - = charge. ~470 mA idle
+                         // off-dock, ~1100 mA with the suction fan at level 100
+                         // (fan draw ~600 mA; the MCU has no per-fan current, only a
+                         // fan_overcurrent flag - the fan is visible here in the total).
     pub temperature_ddeg: i16, // deci-degrees C
     pub charge_voltage_mv: u16,
     pub soc_pct: i16, // state of charge, percent (0..100)
@@ -524,7 +540,7 @@ impl Battery {
         }
         Some(Self {
             voltage_mv: u16le(p, 0),
-            current_ma: u16le(p, 2),
+            current_ma: i16le(p, 2),
             temperature_ddeg: i16le(p, 4),
             charge_voltage_mv: u16le(p, 6),
             soc_pct: i16le(p, 8),
@@ -659,14 +675,17 @@ pub fn encode_motor_ctrl(flag: u8, linear: f32, rotational: f32, out: &mut [u8])
     encode_frame(TX_MOTOR_CTRL, &p, out)
 }
 
-/// `0x01` SetCleaning: **6** actuator-level bytes. **Fully mapped by driving each
-/// actuator directly (path 3, `mcud`) and watching the decoded currents / fan
-/// sound:** `[0]` = side-brush, `[1]` = main-brush (roller), `[2]` = fan, `[3]` =
-/// water pump, `[4]` = mode (`03` vacuum, `00` mop, `01` nav), `[5]` = 0. Evidence:
-/// byte 0 raised `sidebrush_current@28`, byte 1 raised `roller_current@26`, byte 2
-/// spun the fan (audible), byte 3 the pump (needs mop pads). `ava`'s vacuuming
-/// frame is `55 6e 96 00 03 00` = side 85, main 110, fan 150, mode 3. Not emitted
-/// while idle.
+/// `0x01` SetCleaning: **6** actuator-level bytes. Mapped by driving each actuator
+/// directly (path 3, `mcud`) and watching the decoded currents / motor sound:
+/// `[0]` = side-brush, `[1]` = main-brush (roller), `[2]` = suction fan, `[3]` =
+/// **rotating mop pads** (the two spinning mop discs on the robot - observed live;
+/// the robot itself has NO water pump, only the pads), `[4]` = mode (`03` vacuum,
+/// `00` mop, `01` nav), `[5]` = 0. Evidence: byte 0 raised `sidebrush_current@28`,
+/// byte 1 raised `roller_current@26`, byte 2 spun the suction fan (audible; +~0.6 A
+/// on the battery), byte 3 spun the mop pads (+~0.3 A). `ava`'s vacuuming frame is
+/// `55 6e 96 00 03 00` = side 85, main 110, fan 150, mode 3. Not emitted while idle.
+/// **The base station's water pump + mop-drying fan are NOT on this MCU** - they
+/// live in the dock, driven via MIoT/`ava` (Valetudo exposes them); unmapped here.
 pub fn encode_set_cleaning(f: [u8; 6], out: &mut [u8]) -> Option<usize> {
     encode_frame(TX_SET_CLEANING, &f, out)
 }

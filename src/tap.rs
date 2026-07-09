@@ -27,11 +27,11 @@ pub enum Tap {
     Image(Box<crate::msg::CompressedImage>),
     Imu(Box<Imu>),
     Battery(Box<BatteryState>),
-    Triggers { dock: bool, bumper: bool, cliff: bool },
+    Triggers { dock: bool, bumper: bool, cliff: bool, fan_oc: bool },
     /// [wheel_left, wheel_right, main_brush, side_brush, load] raw i16 currents.
     Currents([i16; 5]),
     /// Actuator/turret state telemetry (published periodically, not event-driven).
-    State { turret: bool, fan: u8, side_brush: u8, main_brush: u8, pump: u8 },
+    State { turret: bool, fan: u8, side_brush: u8, main_brush: u8, mop: u8 },
 }
 
 // --- LDS -> LaserScan geometry (W10) -----------------------------------------
@@ -314,6 +314,7 @@ pub fn mcu_reader(addr: String, tx: Sender<Tap>) {
                             dock: t.dock_sta(),
                             bumper: t.left_bumper() || t.right_bumper(),
                             cliff: t.any_cliff(),
+                            fan_oc: t.fan_overcurrent(),
                         });
                     }
                     _ => {}

@@ -31,12 +31,17 @@ Working, ava OFF, one binary (verified on the robot -> a Jazzy container):
 - **motor currents** `/current/{wheel_left,wheel_right,main_brush,side_brush,load}`
   `std_msgs/Int16` (also combined in `/motor_currents` `Int16MultiArray`)
 - **state** `/state/turret` `Bool` + `/state/mode` `String` (DRIVING/PARKED) +
-  `/state/{fan,side_brush,main_brush,water_pump}` `UInt8` (commanded actuator
+  `/state/{fan,side_brush,main_brush,mop}` `UInt8` (commanded actuator
   levels) - handy for a Foxglove / rqt dashboard
 - `/cmd_vel` `geometry_msgs/Twist` -> `MotorCtrl` (teleop; gated by watchdog +
   clamp + cliff/bump hazard). Verified: drove the robot 7.6 cm from the container.
-- **actuator control** `/set_{fan,side_brush,main_brush,water_pump}` `std_msgs/UInt8`
-  (0 = off, ~1-150 = level -> the SetCleaning frame). Publish from a GUI to toggle.
+- **actuator control** `/set_{fan,side_brush,main_brush,mop}` `std_msgs/UInt8`
+  (0 = off, ~1-150 = level -> the SetCleaning frame). `mop` = the two rotating mop
+  pads (byte[3]); the robot has no water pump. Publish from a GUI to toggle.
+- **base station (dock) control** `/set_station` `std_msgs/UInt8`: 0 = idle,
+  1 = dry the mop pads (dock fan), 2 = wash the mop pads (dock water pump). Sent as
+  the `0x26` frame (RE'd from ava; see [docs/MCU.md](docs/MCU.md)). Only run wash
+  (2) docked + attended - it pumps water into the base.
 - **turret control** `/set_turret` `std_msgs/Bool`: true = drive state (turret +
   `/scan` + IR, RGB drops), false = park state (turret off, both cameras). In
   `W10_AUTO` it takes manual control (pauses the motion auto-switch); `/set_auto`
@@ -95,8 +100,15 @@ dynamic loader, so it can't. `w10-camd` is therefore a small DYNAMIC binary (onl
 static. The one irreducible runtime dependency is `/usr/lib/libsunxicamera.so`
 (the Allwinner ISP driver, part of the robot OS) - not vendorable, only dlopen'd.
 
-Image topics use **reliable** QoS: a JPEG is many KB (multiple RTPS fragments),
-and over best-effort WiFi one lost fragment drops the whole frame.
+Image topics use **best-effort** QoS. Reliable was tried first (a JPEG is many
+RTPS fragments, and one lost fragment drops the whole frame), but two reliable
+JPEG streams saturate RustDDS's single network thread over WiFi - the reliable
+retransmit/ACK traffic blocks it and **starves the incoming `/cmd_vel`, so the
+robot stops responding to drive commands**. Best-effort images (plus a lower JPEG
+quality `W10_JPEG_Q` and a per-camera rate cap `W10_IMG_MS`) keep the thread free
+for control; a dropped frame just shows the next one. Note: cold (just-started)
+publishers still take ~10-20 s to discover over WiFi - a **warm**, already-connected
+publisher (a persistent Foxglove/rqt session) drives with no perceptible lag.
 
 ## Full autonomy, ava OFF (one static binary + one dynamic helper, one script)
 
@@ -117,8 +129,11 @@ stops it parks the turret, sends the RGB un-wedge reset (`0x1d [05 00]`, see
 [docs/MCU.md](docs/MCU.md)), and runs **both** cameras -> `/camera` (RGB) +
 `/camera_ir` (IR) at once. It owns the `w10-camd` helper (starts `tof`<->`both`
 itself). So: drive the vacuum with the map + IR, stop, and look at RGB + IR
-together - no ava, no dock, no reboot. (Two full-res reliable JPEG streams over
-WiFi are heavy - ~4 fps each at the GUI; drop IR resolution/quality to smooth it.)
+together - no ava, no dock, no reboot. (Two JPEG streams over WiFi are heavy, so
+`auto` defaults to `W10_JPEG_Q=35` @ `W10_IMG_MS=200` (~5 fps/camera, best-effort)
+to keep `/cmd_vel` responsive while driving; raise the quality if you are not
+driving. Drive from a warm publisher - a cold node's first command lags ~10-20 s
+on WiFi discovery.)
 
 **Freezing the watchdogs is mandatory, not cosmetic:** the vendor `monitor.sh`
 reboots (then factory-resets) the robot if ava is not alive, so `ava_off` freezes

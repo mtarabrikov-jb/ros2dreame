@@ -53,10 +53,14 @@ fn tf_qos() -> QosPolicies {
 /// drops the whole sample, so reliable (fragment retransmit) is needed to get
 /// complete frames through. Keep-last 2 bounds latency if the reader lags.
 fn image_qos() -> QosPolicies {
+    // BEST-EFFORT, not reliable: two full-res JPEG streams (RGB+IR) are many RTPS
+    // fragments each, and over WiFi a reliable writer thrashes on retransmits -
+    // it saturates RustDDS (send window full, PollEventSender EAGAIN) to the point
+    // that INCOMING subs like /cmd_vel are starved and the robot won't drive.
+    // Best-effort drops the odd fragment (a lost frame here and there) but keeps
+    // DDS - and control - responsive. Subscribers must also be best-effort.
     QosPolicyBuilder::new()
-        .reliability(policy::Reliability::Reliable {
-            max_blocking_time: Duration::from_millis(200),
-        })
+        .reliability(policy::Reliability::BestEffort)
         .history(policy::History::KeepLast { depth: 2 })
         .durability(policy::Durability::Volatile)
         .build()
@@ -248,6 +252,13 @@ fn main() {
         let t = mk_pub(&mut node, "/", "cliff", "std_msgs", "Bool");
         node.create_publisher::<msg::Bool>(&t, None).expect("cliff pub")
     };
+    // MCU fan/suction overcurrent fault (Triggers bit 42). The MCU has no analog
+    // fan current - this flag is the only per-fan signal (fan draw itself shows on
+    // /battery.current). true = the MCU tripped the fan's overcurrent protection.
+    let fan_oc_pub = {
+        let t = mk_pub(&mut node, "/fault", "fan", "std_msgs", "Bool");
+        node.create_publisher::<msg::Bool>(&t, None).expect("fan fault pub")
+    };
     let currents_pub = {
         let t = mk_pub(&mut node, "/", "motor_currents", "std_msgs", "Int16MultiArray");
         node.create_publisher::<msg::Int16MultiArray>(&t, None).expect("currents pub")
@@ -269,7 +280,7 @@ fn main() {
         node.create_publisher::<msg::StringMsg>(&t, None).expect("mode pub")
     };
     let mut level_pubs = Vec::new();
-    for n in ["fan", "side_brush", "main_brush", "water_pump"] {
+    for n in ["fan", "side_brush", "main_brush", "mop"] {
         let t = mk_pub(&mut node, "/state", n, "std_msgs", "UInt8");
         level_pubs.push(node.create_publisher::<msg::UInt8>(&t, None).expect("level pub"));
     }
@@ -327,7 +338,8 @@ fn main() {
             ("set_fan", direct::Shared::set_fan as fn(&direct::Shared, u8)),
             ("set_side_brush", direct::Shared::set_side_brush),
             ("set_main_brush", direct::Shared::set_main_brush),
-            ("set_water_pump", direct::Shared::set_pump),
+            ("set_mop", direct::Shared::set_mop),
+            ("set_station", direct::Shared::set_station),
         ] {
             let topic = node
                 .create_topic(&Name::new("/", name).unwrap(), MessageTypeName::new("std_msgs", "UInt8"), &sensor_qos())
@@ -343,7 +355,7 @@ fn main() {
                 }
             });
         }
-        log::info!("actuators: subscribed (/set_fan /set_side_brush /set_main_brush /set_water_pump)");
+        log::info!("actuators: subscribed (/set_fan /set_side_brush /set_main_brush /set_mop /set_station)");
 
         // Manual turret + auto toggle (std_msgs/Bool, for GUI on/off buttons).
         // /set_turret true = drive state (turret + /scan, IR; RGB drops), false =
@@ -388,7 +400,15 @@ fn main() {
     let cam_names: Vec<&str> = cams.iter().map(|(f, _)| *f).collect();
     log::info!("ros2dreame up; publishing /scan /odom /tf /tf_static + cameras {cam_names:?}");
 
-    let (mut n_scan, mut n_odom, mut n_img) = (0u64, 0u64, 0u64);
+    let (mut n_scan, mut n_odom, mut n_img, mut n_curr, mut n_imu) = (0u64, 0u64, 0u64, 0u64, 0u64);
+    // Per-camera publish-rate cap (~6 fps). Two full-res JPEG streams over WiFi are
+    // many RTPS fragments each; publishing every frame floods RustDDS's event
+    // channels (PollEventSender EAGAIN, status channel full) and starves incoming
+    // subs like /cmd_vel - the robot stops responding to drive commands.
+    let mut last_img: std::collections::HashMap<String, std::time::Instant> = std::collections::HashMap::new();
+    // Per-camera min interval in ms (W10_IMG_MS, default 160 = ~6 fps). Higher =
+    // fewer frames = the network thread is freer to receive /cmd_vel promptly.
+    let img_ms: u128 = std::env::var("W10_IMG_MS").ok().and_then(|s| s.parse().ok()).unwrap_or(160);
     for m in rx {
         match m {
             Tap::Scan(s) => {
@@ -402,41 +422,59 @@ fn main() {
                 }
             }
             Tap::Odom(o) => {
-                let tf = odom_tf(&o);
-                let _ = odom_pub.publish(*o);
-                let _ = tf_pub.publish(tf);
                 n_odom += 1;
+                if n_odom % 2 == 0 {
+                    // ~25 Hz (source 50 Hz) - eases the DDS load; still smooth.
+                    let tf = odom_tf(&o);
+                    let _ = odom_pub.publish(*o);
+                    let _ = tf_pub.publish(tf);
+                }
             }
             Tap::Image(img) => {
                 let fid = img.header.frame_id.clone();
-                if let Some((_, p)) = img_pubs.iter().find(|(f, _)| *f == fid) {
-                    let _ = p.publish(*img);
-                    n_img += 1;
+                let now = std::time::Instant::now();
+                let due = last_img.get(&fid).map_or(true, |t| now.duration_since(*t).as_millis() >= img_ms);
+                if due {
+                    if let Some((_, p)) = img_pubs.iter().find(|(f, _)| *f == fid) {
+                        let _ = p.publish(*img);
+                        n_img += 1;
+                        last_img.insert(fid, now);
+                    }
                 }
             }
             Tap::Imu(i) => {
-                let _ = imu_pub.publish(*i);
+                n_imu += 1;
+                if n_imu % 4 == 0 {
+                    let _ = imu_pub.publish(*i); // ~25 Hz (source ~100 Hz)
+                }
             }
             Tap::Battery(b) => {
                 let _ = battery_pub.publish(*b);
             }
-            Tap::Triggers { dock, bumper, cliff } => {
+            Tap::Triggers { dock, bumper, cliff, fan_oc } => {
                 let _ = dock_pub.publish(msg::Bool { data: dock });
                 let _ = bumper_pub.publish(msg::Bool { data: bumper });
                 let _ = cliff_pub.publish(msg::Bool { data: cliff });
+                let _ = fan_oc_pub.publish(msg::Bool { data: fan_oc });
             }
             Tap::Currents(c) => {
-                let _ = currents_pub.publish(crate::tap::currents_array(c));
-                for (p, &v) in current_pubs.iter().zip(c.iter()) {
-                    let _ = p.publish(msg::Int16 { data: v });
+                // Decimate to ~5 Hz: the MCU streams currents at 50 Hz, but 6 topics
+                // (array + 5 named) x 50 Hz floods RustDDS over WiFi and starves
+                // incoming subs like /cmd_vel. A dashboard doesn't need 50 Hz.
+                n_curr += 1;
+                if n_curr % 10 == 0 {
+                    let _ = currents_pub.publish(crate::tap::currents_array(c));
+                    for (p, &v) in current_pubs.iter().zip(c.iter()) {
+                        let _ = p.publish(msg::Int16 { data: v });
+                    }
                 }
             }
-            Tap::State { turret, fan, side_brush, main_brush, pump } => {
+            Tap::State { turret, fan, side_brush, main_brush, mop } => {
                 let _ = turret_pub.publish(msg::Bool { data: turret });
                 let _ = mode_pub.publish(msg::StringMsg {
                     data: if turret { "DRIVING" } else { "PARKED" }.into(),
                 });
-                for (p, v) in level_pubs.iter().zip([fan, side_brush, main_brush, pump]) {
+                for (p, v) in level_pubs.iter().zip([fan, side_brush, main_brush, mop]) {
                     let _ = p.publish(msg::UInt8 { data: v });
                 }
             }
