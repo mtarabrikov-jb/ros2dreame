@@ -1,0 +1,192 @@
+{
+  "configById": {
+    "Publish!fanon": {
+      "topicName": "/set_fan",
+      "datatype": "std_msgs/msg/UInt8",
+      "buttonText": "Fan ON",
+      "buttonColor": "#43a047",
+      "advancedView": true,
+      "value": "{ \"data\": 100 }"
+    },
+    "Publish!fanoff": {
+      "topicName": "/set_fan",
+      "datatype": "std_msgs/msg/UInt8",
+      "buttonText": "Fan OFF",
+      "buttonColor": "#e53935",
+      "advancedView": true,
+      "value": "{ \"data\": 0 }"
+    },
+    "Publish!sideon": {
+      "topicName": "/set_side_brush",
+      "datatype": "std_msgs/msg/UInt8",
+      "buttonText": "Side brush ON",
+      "buttonColor": "#43a047",
+      "advancedView": true,
+      "value": "{ \"data\": 100 }"
+    },
+    "Publish!sideoff": {
+      "topicName": "/set_side_brush",
+      "datatype": "std_msgs/msg/UInt8",
+      "buttonText": "Side brush OFF",
+      "buttonColor": "#e53935",
+      "advancedView": true,
+      "value": "{ \"data\": 0 }"
+    },
+    "Publish!mainon": {
+      "topicName": "/set_main_brush",
+      "datatype": "std_msgs/msg/UInt8",
+      "buttonText": "Main brush ON",
+      "buttonColor": "#43a047",
+      "advancedView": true,
+      "value": "{ \"data\": 100 }"
+    },
+    "Publish!mainoff": {
+      "topicName": "/set_main_brush",
+      "datatype": "std_msgs/msg/UInt8",
+      "buttonText": "Main brush OFF",
+      "buttonColor": "#e53935",
+      "advancedView": true,
+      "value": "{ \"data\": 0 }"
+    },
+    "Publish!turreton": {
+      "topicName": "/set_turret",
+      "datatype": "std_msgs/msg/Bool",
+      "buttonText": "Turret ON (drive/scan)",
+      "buttonColor": "#43a047",
+      "advancedView": true,
+      "value": "{ \"data\": true }"
+    },
+    "Publish!turretoff": {
+      "topicName": "/set_turret",
+      "datatype": "std_msgs/msg/Bool",
+      "buttonText": "Turret OFF (park/both cams)",
+      "buttonColor": "#e53935",
+      "advancedView": true,
+      "value": "{ \"data\": false }"
+    },
+    "Publish!auto": {
+      "topicName": "/set_auto",
+      "datatype": "std_msgs/msg/Bool",
+      "buttonText": "Resume AUTO",
+      "buttonColor": "#1e88e5",
+      "advancedView": true,
+      "value": "{ \"data\": true }"
+    },
+    "Image!rgb": {
+      "imageMode": { "imageTopic": "/camera/image_raw/compressed" }
+    },
+    "Image!ir": {
+      "imageMode": { "imageTopic": "/camera_ir/image_raw/compressed" }
+    },
+    "Plot!currents": {
+      "paths": [
+        { "value": "/current/wheel_left.data", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/current/wheel_right.data", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/current/main_brush.data", "enabled": true, "timestampMethod": "receiveTime" },
+        { "value": "/current/side_brush.data", "enabled": true, "timestampMethod": "receiveTime" }
+      ],
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    },
+    "Gauge!batt": {
+      "path": "/battery.voltage",
+      "minValue": 12,
+      "maxValue": 17,
+      "colorMode": "colormap",
+      "colorMap": "red-yellow-green",
+      "gradient": ["#e53935", "#43a047"],
+      "reverse": false
+    },
+    "RawMessages!state": {
+      "topicPath": "/state/mode"
+    },
+    "Indicator!bumper": {
+      "path": "/bumper.data",
+      "style": "bulb",
+      "fallbackColor": "#88888a",
+      "fallbackLabel": "?",
+      "rules": [
+        { "operator": "=", "rawValue": "true", "color": "#e53935", "label": "BUMPER" },
+        { "operator": "=", "rawValue": "false", "color": "#43a047", "label": "clear" }
+      ]
+    },
+    "Indicator!cliff": {
+      "path": "/cliff.data",
+      "style": "bulb",
+      "fallbackColor": "#88888a",
+      "fallbackLabel": "?",
+      "rules": [
+        { "operator": "=", "rawValue": "true", "color": "#e53935", "label": "CLIFF" },
+        { "operator": "=", "rawValue": "false", "color": "#43a047", "label": "clear" }
+      ]
+    },
+    "Indicator!dock": {
+      "path": "/dock.data",
+      "style": "bulb",
+      "fallbackColor": "#88888a",
+      "fallbackLabel": "?",
+      "rules": [
+        { "operator": "=", "rawValue": "true", "color": "#1e88e5", "label": "DOCKED" },
+        { "operator": "=", "rawValue": "false", "color": "#88888a", "label": "off dock" }
+      ]
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": { "speed": 1 },
+  "layout": {
+    "direction": "row",
+    "splitPercentage": 30,
+    "first": {
+      "direction": "column",
+      "splitPercentage": 22,
+      "first": { "direction": "row", "first": "Publish!fanon", "second": "Publish!fanoff" },
+      "second": {
+        "direction": "column",
+        "splitPercentage": 28,
+        "first": { "direction": "row", "first": "Publish!sideon", "second": "Publish!sideoff" },
+        "second": {
+          "direction": "column",
+          "splitPercentage": 38,
+          "first": { "direction": "row", "first": "Publish!mainon", "second": "Publish!mainoff" },
+          "second": {
+            "direction": "column",
+            "splitPercentage": 55,
+            "first": { "direction": "row", "first": "Publish!turreton", "second": "Publish!turretoff" },
+            "second": "Publish!auto"
+          }
+        }
+      }
+    },
+    "second": {
+      "direction": "column",
+      "splitPercentage": 42,
+      "first": { "direction": "row", "first": "Image!rgb", "second": "Image!ir" },
+      "second": {
+        "direction": "column",
+        "splitPercentage": 48,
+        "first": "Plot!currents",
+        "second": {
+          "direction": "row",
+          "splitPercentage": 35,
+          "first": "Gauge!batt",
+          "second": {
+            "direction": "row",
+            "splitPercentage": 55,
+            "first": "RawMessages!state",
+            "second": {
+              "direction": "column",
+              "splitPercentage": 33,
+              "first": "Indicator!bumper",
+              "second": { "direction": "column", "splitPercentage": 50, "first": "Indicator!cliff", "second": "Indicator!dock" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

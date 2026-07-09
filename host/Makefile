@@ -7,7 +7,7 @@ SRC  := source /opt/ros/jazzy/setup.bash &&
 GUI  := $(DC) exec -d $(SVC) bash -c   # detached: GUI opens, make returns
 RUN  := $(DC) exec $(SVC) bash -c      # attached (stdin): terminal tools
 
-.PHONY: build up all down shell topics rviz rqt steer image tf teleop
+.PHONY: build up all down shell topics rviz rqt steer image tf teleop foxglove
 build:
 	$(DC) build
 up:
@@ -22,6 +22,11 @@ shell:
 	$(DC) exec $(SVC) bash
 topics:
 	$(RUN) '$(SRC) ros2 topic list'
+foxglove:                   ## foxglove_bridge WebSocket (ws://localhost:8765) - import host/foxglove/ros2dreame.json
+	-$(DC) exec -T $(SVC) bash -c 'ros2 pkg prefix foxglove_bridge >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq ros-jazzy-foxglove-bridge)'
+	-$(DC) exec -T $(SVC) pkill -9 -f '[f]oxglove_bridge' 2>/dev/null || true
+	$(GUI) '$(SRC) ros2 run foxglove_bridge foxglove_bridge --ros-args -p port:=8765 -p address:=0.0.0.0'
+	@echo ">> foxglove_bridge on ws://localhost:8765 -- open app.foxglove.dev, connect, import host/foxglove/ros2dreame.json"
 rviz:                       ## /scan /odom /tf + pose
 	$(GUI) '$(SRC) rviz2 -d /cfg/rviz/dreame.rviz'
 rqt:                        ## everything: topics, images, plots, publisher
