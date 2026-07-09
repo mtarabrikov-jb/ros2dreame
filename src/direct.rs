@@ -289,6 +289,17 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
             };
             send(&w, 0x01, &p);
         }
+        // Base-station (dock) command via 0x26 - sent in BOTH modes, because the
+        // robot is normally parked (observe) while docked, so /set_station must work
+        // when parked. station=0 falls through to the nav-mode idle 0x26 heartbeat.
+        let station = sh.station.load(Ordering::Relaxed);
+        if station != 0 && tick % 50 == 30 {
+            let p: [u8; 8] = match station {
+                1 => [0x0e, 0x00, 0x00, 0x78, 0x00, 0x00, 0x01, 0x02], // dry (dock fan)
+                _ => [0x0d, 0x00, 0x46, 0x00, 0x00, 0x00, 0x00, 0x02], // wash (dock water pump)
+            };
+            send(&w, 0x26, &p);
+        }
         if observe {
             // Idle/parked: a zero MotorCtrl keeps the MCU streaming telemetry
             // (odom/imu), but NO nav frames and turret off -> not an active/nav
@@ -328,16 +339,14 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
         if tick % 50 == 20 {
             send(&w, 0x14, if lidar { &[0x04, 0x01] } else { &[0x04, 0x00] });
         }
-        if tick % 50 == 30 {
-            // 0x26 also drives the base station (dock). Idle = the mcud heartbeat;
-            // station=1/2 sends the wash/dry command captured from ava (byte3=0x78 +
-            // byte6=0x01 = dry the pads / dock fan; byte2=0x46 = wash the pads / dock
-            // water pump). byte0 is a mode nibble, byte7=0x02. See docs/MCU.md.
-            let p: [u8; 8] = match sh.station.load(Ordering::Relaxed) {
-                1 => [0x0e, 0x00, 0x00, 0x78, 0x00, 0x00, 0x01, 0x02], // dry (dock fan)
-                2 => [0x0d, 0x00, 0x46, 0x00, 0x00, 0x00, 0x00, 0x02], // wash (dock pump)
-                _ if lidar => [0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04],
-                _ => [0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04],
+        if tick % 50 == 30 && station == 0 {
+            // nav-mode 0x26 idle heartbeat (mcud value; keeps the MCU in nav mode /
+            // turret spinning). The dock command (station != 0) is sent above so it
+            // also works while parked. See docs/MCU.md for the 0x26 dock semantics.
+            let p: [u8; 8] = if lidar {
+                [0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04]
+            } else {
+                [0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04]
             };
             send(&w, 0x26, &p);
         }
