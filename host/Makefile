@@ -45,7 +45,7 @@ localize:                   ## load + drive on the saved map WITHOUT changing it
 	$(GUI) '$(SRC) rviz2 -d /cfg/rviz/slam.rviz $(LOG)'
 	@echo ">> LOCALIZATION + rviz up: saved map is fixed (NOT modified). Set start pose via rviz 2D Pose Estimate. Stop mapping (make slam) first - they conflict. Logs: make logs"
 nav2:                       ## Nav2 autonomous navigation on the saved map (NAME=dreame_map) + rviz
-	$(GUI) '$(SRC) ros2 launch nav2_bringup bringup_launch.py use_sim_time:=false map:=/cfg/maps/$(NAME).yaml params_file:=/cfg/nav2/nav2_params.yaml $(LOG)'
+	$(GUI) '$(SRC) ros2 launch /cfg/nav2/nav2_minimal.launch.py map:=/cfg/maps/$(NAME).yaml params_file:=/cfg/nav2/nav2_params.yaml $(LOG)'
 	$(GUI) '$(SRC) rviz2 -d /opt/ros/jazzy/share/nav2_bringup/rviz/nav2_default_view.rviz $(LOG)'
 	@echo ">> Nav2 up (map=$(NAME)). In rviz: '2D Pose Estimate' = where the robot is, then 'Nav2 Goal' = destination. Turret must spin for /scan. Stop make slam/localize first. Logs: make logs"
 save-map:                   ## save current map to host/maps/ (NAME=dreame_map): .pgm/.yaml + slam .posegraph/.data
