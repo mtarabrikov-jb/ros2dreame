@@ -8,12 +8,12 @@ slam_toolbox:
     ceres_trust_strategy: LEVENBERG_MARQUARDT
     ceres_dogleg_type: TRADITIONAL_DOGLEG
     ceres_loss_function: None
+    # mapping = build a fresh map from scratch (clean, no pose-mismatch jitter).
+    # To REUSE the saved map use `make localize` (loads it in localization mode,
+    # where the map is fixed and the robot localises into it via scan matching).
+    # Auto-loading a map here in mapping mode corrupts it when the robot is not
+    # exactly at the saved origin, so it is intentionally NOT set.
     mode: mapping
-    # Auto-load the saved map on startup (make save-map writes it here), so a
-    # container recreate / slam restart continues the same map. Absent file
-    # (first run, before any save) -> slam_toolbox warns and starts fresh.
-    map_file_name: /cfg/maps/dreame_map
-    map_start_pose: [0.0, 0.0, 0.0]
     map_frame: map
     base_frame: base_link
     odom_frame: odom
