@@ -16,6 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-jazzy-slam-toolbox \
         ros-jazzy-nav2-map-server \
         ros-jazzy-foxglove-bridge \
+        ros-jazzy-navigation2 \
+        ros-jazzy-nav2-bringup \
     && rm -rf /var/lib/apt/lists/*
 
 # Source ROS in every shell (docker exec bypasses the entrypoint).

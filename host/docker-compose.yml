@@ -33,5 +33,6 @@ services:
       - ./fastdds_no_shm.xml:/cfg/fastdds_no_shm.xml:ro
       - ../rviz:/cfg/rviz:ro
       - ./slam:/cfg/slam:ro
+      - ./nav2:/cfg/nav2:ro
       - ./maps:/cfg/maps          # slam map output (rw) - `make save-map` writes here
     command: sleep infinity
