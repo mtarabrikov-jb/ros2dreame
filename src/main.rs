@@ -340,6 +340,7 @@ fn main() {
             ("set_main_brush", direct::Shared::set_main_brush),
             ("set_mop", direct::Shared::set_mop),
             ("set_station", direct::Shared::set_station),
+            ("set_dock_screen", direct::Shared::set_dock_screen),
         ] {
             let topic = node
                 .create_topic(&Name::new("/", name).unwrap(), MessageTypeName::new("std_msgs", "UInt8"), &sensor_qos())
@@ -355,7 +356,27 @@ fn main() {
                 }
             });
         }
-        log::info!("actuators: subscribed (/set_fan /set_side_brush /set_main_brush /set_mop /set_station)");
+        log::info!("actuators: subscribed (/set_fan /set_side_brush /set_main_brush /set_mop /set_station /set_dock_screen)");
+
+        // Raw dock 0x26 frame (std_msgs/UInt8MultiArray, first 8 bytes) - full manual
+        // control of the base-station frame for RE (byte0=screen, byte7 progress, ...).
+        // Overrides /set_dock_screen while idle; byte6 != 0 drives pump/fan (careful).
+        {
+            let topic = node
+                .create_topic(&Name::new("/", "set_dock_frame").unwrap(), MessageTypeName::new("std_msgs", "UInt8MultiArray"), &sensor_qos())
+                .expect("dock_frame topic");
+            let sub = node
+                .create_subscription::<msg::UInt8MultiArray>(&topic, Some(sensor_qos()))
+                .expect("dock_frame sub");
+            let d = drive.clone();
+            thread::spawn(move || loop {
+                match sub.take() {
+                    Ok(Some((m, _))) => d.set_dock_frame(&m.data),
+                    _ => thread::sleep(std::time::Duration::from_millis(20)),
+                }
+            });
+            log::info!("dock: subscribed (/set_dock_frame - raw 8-byte 0x26)");
+        }
 
         // Manual turret + auto toggle (std_msgs/Bool, for GUI on/off buttons).
         // /set_turret true = drive state (turret + /scan, IR; RGB drops), false =

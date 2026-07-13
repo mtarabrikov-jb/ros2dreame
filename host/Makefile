@@ -14,7 +14,7 @@ RUN  := $(DC) exec $(SVC) bash -c      # attached (stdin): terminal tools
 # NAME: map basename shared by save-map / localize / nav2 (no trailing spaces!)
 NAME ?= dreame_map
 
-.PHONY: build up all down logs shell topics rviz rqt steer tf teleop foxglove slam localize nav2 save-map
+.PHONY: build up all down logs shell topics rviz rqt steer tf teleop foxglove slam localize nav2 save-map dock-sweep
 build:
 	$(DC) build
 up:
@@ -53,6 +53,9 @@ save-map:                   ## save current map to host/maps/ (NAME=dreame_map):
 	$(RUN) '$(SRC) ros2 run nav2_map_server map_saver_cli -f /cfg/maps/$(NAME) --ros-args -p save_map_timeout:=15.0'
 	-$(DC) exec -T $(SVC) bash -c 'chown $$(stat -c "%u:%g" /cfg/maps) /cfg/maps/$(NAME).* 2>/dev/null'
 	@echo ">> saved host/maps/$(NAME).{pgm,yaml,posegraph,data}"
+dock-sweep:                 ## sweep dock LCD screen codes on /set_dock_screen - WATCH the dock panel (DWELL=6 CODES="..")
+	$(DC) exec -T $(SVC) env DWELL="$(DWELL)" CODES="$(CODES)" bash -s < dock-sweep.sh
+	@echo ">> sweep done. Robot must be DOCKED + idle (make: /set_station 0). Note byte0->screen for DOCK_PROTOCOL.md"
 rviz:                       ## /scan /odom /tf + pose
 	$(GUI) '$(SRC) rviz2 -d /cfg/rviz/dreame.rviz $(LOG)'
 rqt:                        ## everything: topics, images, plots, publisher

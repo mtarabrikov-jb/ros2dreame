@@ -64,6 +64,22 @@ pub struct Shared {
     // pads (dock fan), 2 = wash the mop pads (dock water pump)). Reverse-engineered
     // by snooping ava's ttyS4 while triggering wash/dry from Valetudo.
     station: AtomicU8,
+    // Dock LCD screen/status code. The 0x26 frame's byte0 is the dock "mode" the
+    // dock MCU renders on its own LCD (byte0=0x14 idle, 0x0d wash, 0x0e dry are the
+    // known ones; the dock has more screen codes - see VacuumTiger DOCK_PROTOCOL.md).
+    // When idle (station=0) and this is non-zero, we send an idle-shaped 0x26 with
+    // byte0 = this code, so the robot MCU relays it to the dock and the LCD shows it.
+    // 0 = leave the dock alone. Byte0->screen mapping beyond idle/wash/dry is not yet
+    // verified on the LCD; treat values as experimental (drive /set_dock_screen and
+    // watch the panel). The frame is otherwise the safe idle frame (no pump/fan).
+    dock_screen: AtomicU8,
+    // Raw 8-byte 0x26 dock payload override, packed little-endian into a u64 (0 =
+    // none). Sent verbatim as the 0x26 frame while idle, overriding dock_screen -
+    // the full lever for building the byte0->screen table and driving progress
+    // screens (byte7) by hand. UNSAFE: byte6 != 0 can start the dock pump/fan, so
+    // only set byte6/params deliberately. Real frames set byte7=0x02, so a valid
+    // frame is never all-zero; all-zero clears the override.
+    dock_frame: AtomicU64,
 }
 
 impl Shared {
@@ -118,6 +134,27 @@ impl Shared {
     /// 2 (wash) runs the dock water pump - do not leave it on unattended.
     pub fn set_station(&self, v: u8) {
         self.station.store(v, Ordering::Relaxed);
+    }
+    /// Dock LCD screen/status code -> the 0x26 frame's byte0 (dock "mode"), relayed
+    /// by the robot MCU to the dock and rendered on its LCD. 0 = leave the dock
+    /// alone; non-zero sends an idle-shaped 0x26 (no pump/fan) with byte0 = the code
+    /// while station is idle. Known: 0x14 idle, 0x0d wash, 0x0e dry; other dock
+    /// screen codes are experimental (see VacuumTiger DOCK_PROTOCOL.md). Ignored
+    /// while a wash/dry is running (those drive the screen themselves).
+    pub fn set_dock_screen(&self, v: u8) {
+        self.dock_screen.store(v, Ordering::Relaxed);
+    }
+    /// Raw 8-byte 0x26 dock payload override (from `/set_dock_frame`). >=8 bytes ->
+    /// the first 8 are sent verbatim as the periodic 0x26 while idle (overrides
+    /// `set_dock_screen`); fewer than 8 (or all-zero) clears the override. Full
+    /// manual control for RE - byte0=screen, byte6!=0 drives pump/fan (careful).
+    pub fn set_dock_frame(&self, bytes: &[u8]) {
+        let packed = if bytes.len() >= 8 {
+            u64::from_le_bytes(bytes[..8].try_into().unwrap())
+        } else {
+            0
+        };
+        self.dock_frame.store(packed, Ordering::Relaxed);
     }
     /// Turret (LDS) currently commanded on (driving) vs off (parked).
     pub fn turret_on(&self) -> bool {
@@ -249,12 +286,12 @@ fn rx_loop(mut rd: File, w: Arc<Mutex<File>>, sh: Arc<Shared>, tx: Sender<Tap>) 
 
 /// TX: MotorCtrl at 50 Hz plus the periodic frames `ava` emits (which also keep
 /// the LDS turret spinning while `lidar_on`).
-/// ava's mop-wash cycle, captured by snooping ttyS4 during a Valetudo-triggered
-/// wash. Each step: (0x26 pump frame, mop-pad level, duration ms). Structure:
-/// wet wash (water on + pads high, pump speed ramps) -> water off, pads scrub the
-/// worked-in water (~90 s) -> dock drying fan. Replayed on /set_station 2; after
-/// the last step the driver returns station to 0 (idle + off-pulse). During a step
-/// the SetCleaning frame drives the pads (`[00 01 00 <pad> 00 00]`, mop mode 00).
+/// ava's mop-wash steps, captured by snooping ttyS4 during a Valetudo-triggered
+/// wash. Each step: (0x26 pump frame, mop-pad level, duration ms). Wet wash (water
+/// on + pads high, pump speed ramps) -> water off, pads scrub the worked-in water.
+/// Replayed on /set_station 2, then followed by the dry stages (DRY_SCREENS). During
+/// a step the SetCleaning frame drives the pads (`[00 01 00 <pad> 00 00]`, mop mode
+/// 00). byte0 of each frame is also the dock LCD screen (0x0d = "Mop pad cleaning").
 const WASH_STEPS: &[([u8; 8], u8, u64)] = &[
     ([0x0d, 0x00, 0x46, 0, 0, 0, 0, 0x02], 0xd6, 20_700), // wet (slow pump) + pads high
     ([0x0d, 0x78, 0x46, 0, 0, 0, 0, 0x02], 0x00, 8_000),  // wet (fast pump) + pads off
@@ -264,13 +301,20 @@ const WASH_STEPS: &[([u8; 8], u8, u64)] = &[
     ([0x0d, 0x00, 0x00, 0, 0, 0, 0, 0x02], 0x4b, 65_000), // scrub + pads medium
     ([0x0d, 0x64, 0x00, 0, 0, 0, 0, 0x02], 0xd6, 10_000), // scrub + pads high
     ([0x0d, 0x64, 0x00, 0, 0, 0, 0, 0x02], 0x00, 8_000),  // pads off
-    ([0x0e, 0x00, 0x00, 0x78, 0, 0, 0x01, 0x02], 0x00, 1_200_000), // dock drying fan (20 min)
 ];
 
-/// The wash step active at `elapsed_ms` into the cycle, or None once it is over.
-fn wash_step(elapsed_ms: u64) -> Option<&'static ([u8; 8], u8, u64)> {
+/// Dock drying-fan stages: the fan runs the whole time (byte3=0x78, byte6=0x01) while
+/// byte0 walks the dock's four "Mop pad dehydrating N/4" LCD screens (0x0e=1/4,
+/// 0x65/0x66/0x67=2/4..4/4, verified live) so the panel shows real dry progress
+/// instead of a static 1/4. Used by /set_station 1 (dry) and appended after
+/// WASH_STEPS for /set_station 2. Per-stage duration = W10_DRY_STAGE_MS (default 5 min).
+const DRY_SCREENS: [u8; 4] = [0x0e, 0x65, 0x66, 0x67];
+
+/// The active step at `elapsed_ms` into a timed (0x26 frame, pad, duration) sequence,
+/// or None once it is over.
+fn seq_step(steps: &[([u8; 8], u8, u64)], elapsed_ms: u64) -> Option<&([u8; 8], u8, u64)> {
     let mut acc = 0u64;
-    for s in WASH_STEPS {
+    for s in steps {
         acc += s.2;
         if elapsed_ms < acc {
             return Some(s);
@@ -288,6 +332,15 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
     // actively stop it (then go quiet so parked-mode RGB is undisturbed).
     let mut prev_station: u8 = 0;
     let mut off_pulse: u32 = 5; // also pulse on startup, to stop any dock cycle left running
+    // Dry stages (advancing dehydrating screen + fan). Per-stage duration is
+    // W10_DRY_STAGE_MS (default 5 min -> 20 min total); a short value eases testing.
+    let dry_ms: u64 = std::env::var("W10_DRY_STAGE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(300_000);
+    let dry_steps: Vec<([u8; 8], u8, u64)> = DRY_SCREENS
+        .iter()
+        .map(|&c| ([c, 0, 0, 0x78, 0, 0, 0x01, 0x02], 0x00u8, dry_ms))
+        .collect();
+    // Full wash = the wet-wash steps, then the dry stages.
+    let wash_seq: Vec<([u8; 8], u8, u64)> = WASH_STEPS.iter().cloned().chain(dry_steps.iter().cloned()).collect();
     // In observe (parked, turret off) ros2dreame emits the MCU camera-AI-reset
     // frame `0x1d [0x05, 0x00]`. ava's node_signal::AIReset2ComProcess builds
     // exactly this from a CAMERA_AI_RESET msg (byte0=0x00 = reset; 0x01 = enable,
@@ -306,17 +359,26 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
         if tick % 25 == 5 {
             send(&w, 0x02, &[0x21]); // SetLED / heartbeat
         }
-        // Base-station wash cycle: station=2 replays ava's captured cycle (WASH_STEPS),
-        // driving both the mop pads (SetCleaning below) and the pump/fan (0x26 below).
-        // After the last step the driver returns station to 0 (idle + off-pulse). Sent
-        // in both modes since the robot is parked while docked.
+        // Base-station cycles: station=2 = full wash (WASH_STEPS wet steps + dry
+        // stages), station=1 = dry only (dry stages). Drives the mop pads (SetCleaning
+        // below) and the pump/fan (0x26 below); each frame's byte0 also drives the
+        // matching dock LCD screen. After the last step the driver returns station to 0
+        // (idle + off-pulse). Sent in both modes since the robot is parked while docked.
         let mut station = sh.station.load(Ordering::Relaxed);
         let (mut wash_pump, mut wash_pad): (Option<[u8; 8]>, Option<u8>) = (None, None);
-        if station == 2 {
+        // station 2 = full wash (wet steps + dry stages); station 1 = dry only. Both
+        // are timed sequences whose 0x26 byte0 also walks the matching dock LCD screen
+        // (0x0d cleaning during wash, 0x0e/0x65/0x66/0x67 = dehydrating 1/4..4/4 on dry).
+        let seq: Option<&[([u8; 8], u8, u64)]> = match station {
+            2 => Some(&wash_seq),
+            1 => Some(&dry_steps),
+            _ => None,
+        };
+        if let Some(seq) = seq {
             if wash_start_ms == 0 {
                 wash_start_ms = sh.now_ms();
             }
-            match wash_step(sh.now_ms().saturating_sub(wash_start_ms)) {
+            match seq_step(seq, sh.now_ms().saturating_sub(wash_start_ms)) {
                 Some(s) => {
                     wash_pump = Some(s.0);
                     wash_pad = Some(s.1);
@@ -362,12 +424,33 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
                 Some(pump)
             } else {
                 match station {
-                    1 => Some([0x0e, 0x00, 0x00, 0x78, 0x00, 0x00, 0x01, 0x02]), // dry (dock fan)
                     _ if off_pulse > 0 => {
                         off_pulse -= 1;
-                        Some([0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02]) // idle -> dock off
+                        // Dock stop/idle = ava's exact frame `26 15 ..` (byte0=0x15).
+                        // This is what STOPS a running wash/dry - snooped from ava's
+                        // ttyS4 as the "stop mop drying" command (Valetudo). byte0=0x14
+                        // (an earlier guess) does NOT abort a dry; 0x15 does.
+                        Some([0x15, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02]) // idle/stop -> dock off
                     }
-                    _ => None,
+                    // Idle: a raw 0x26 override (/set_dock_frame) wins; else a screen
+                    // code (/set_dock_screen) -> idle-shaped 0x26 with byte0 = code
+                    // (no pump/fan, byte6=0); else leave the dock alone.
+                    _ => {
+                        let raw = sh.dock_frame.load(Ordering::Relaxed);
+                        if raw != 0 {
+                            Some(raw.to_le_bytes())
+                        } else {
+                            match sh.dock_screen.load(Ordering::Relaxed) {
+                                // Docked/parked idle = ava's `26 15 ..` heartbeat, sent
+                                // CONTINUOUSLY (like ava streams it). This keeps a
+                                // stopped dock idle and is what makes /set_station 0
+                                // actually ABORT a wash/dry - a few frames don't stick.
+                                0 if observe => Some([0x15, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02]),
+                                0 => None, // nav mode: the nav-heartbeat 0x26 (below) drives it
+                                s => Some([s, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02]),
+                            }
+                        }
+                    }
                 }
             };
             if let Some(p) = p {
@@ -488,6 +571,8 @@ pub fn run(mcu_path: &str, lds_path: &str, observe: bool, tx: Sender<Tap>) -> Ar
         fan: AtomicU8::new(0),
         mop: AtomicU8::new(0),
         station: AtomicU8::new(0),
+        dock_screen: AtomicU8::new(0),
+        dock_frame: AtomicU64::new(0),
     });
 
     let rd = match open_serial(mcu_path, libc::B115200) {

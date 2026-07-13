@@ -42,23 +42,99 @@ mop wash/dry from Valetudo (`MopDockClean`/`MopDockDryManualTriggerCapability`):
 
 | byte0 (mode) | 1 | 2 | 3 | 4 | 5 | 6 | 7 | meaning |
 |---|---|---|---|---|---|---|---|---|
-| `14`/`64` | 00 | 00 | 00 | 00 | 00 | 00 | 02 | idle heartbeat |
-| `0e` | 00 | 00 | **78** | 00 | 00 | **01** | 02 | **dry** (dock fan): byte3=0x78 time, byte6=0x01 on |
+| `15` | 00 | 00 | 00 | 00 | 00 | 00 | 02 | **docked idle / STOP** (charging screen). ava streams this continuously; this exact frame is what aborts a running wash/dry |
+| `0e` | 00 | 00 | **78** | 00 | 00 | **01** | 02 | **dry** 1/4 (dock fan/heater): byte3=0x78 time, byte6=0x01 on |
+| `65`/`66`/`67` | 00 | 00 | 78 | 00 | 00 | 01 | 02 | **dry** 2/4, 3/4, 4/4 - byte0 advances the "dehydrating N/4" LCD screen |
 | `0d` | **64** | **46** | 00 | 00 | 00 | 00 | 02 | **wash** (dock water pump): byte1=0x64 pump rate, byte2=0x46 water (byte1=0 = slow) |
 
-`src/direct.rs` sends these when `station` is set (`/set_station` `0`/`1`/`2`). The
-idle heartbeat keeps `byte7=0x04` (the mcud value, benign); the dock commands use
-ava's `byte7=0x02`. No `0x25` frame is used on this dock. `/set_station 0` sends a
-few idle `0x26` (the dock keeps running until told to stop). Only trigger a wash
-when docked + attended - it pumps water into the base.
+`byte0` doubles as the dock **LCD screen** code (`0x0d`="Mop pad cleaning",
+`0x0e`/`0x65`-`0x67`="dehydrating 1/4..4/4", `0x15`="100%"/charging - full table in
+[`DOCK_PROTOCOL.md`](../../VacuumTiger/dreame-w10/docs/DOCK_PROTOCOL.md)).
 
-**The full wash cycle** (`/set_station 2`) is a state machine (`WASH_STEPS` in
-`src/direct.rs`) captured by snooping ava's ttyS4 during a Valetudo wash: it drives
-**both** the pump/fan (0x26) and the mop pads (SetCleaning `[00 01 00 <pad> 00 00]`,
-mop mode 00 - the pads do NOT rotate while docked in vacuum mode 0x03). Cycle: wet
-wash (water on, pump speed ramps `00`->`78`->`64`, pads high `0xd6`) ~33 s -> water
-off, pads scrub the worked-in water (`0x4b`) ~90 s -> dock drying fan
-(`0e 00 00 78 00 00 01 02`) -> idle. `/set_station 0` aborts mid-cycle.
+`src/direct.rs` drives these from `/set_station` (`0`/`1`/`2`):
+- **`0` = idle / STOP** - streams the `0x15` docked-idle frame **continuously** (in
+  observe/parked mode). This is what **aborts** a running wash/dry: the dock latches
+  its own autonomous cycle once started, and only ava's exact `0x15` frame, streamed,
+  stops it. **`byte0=0x14` (an earlier guess) does NOT abort a dry; `0x15` does** -
+  verified live against a Valetudo "stop mop drying" snoop. A few pulses are not
+  enough; it must be streamed.
+- **`1` = dry** - runs the dehydrating fan/heater and walks byte0 through the four
+  screens (`0x0e`->`0x65`->`0x66`->`0x67` = 1/4..4/4) over `W10_DRY_STAGE_MS` per
+  stage (default 5 min -> 20 min). `DRY_SCREENS` in `src/direct.rs`.
+- **`2` = wash** - the full cycle (`WASH_STEPS`, snooped from a Valetudo wash: wet
+  wash with a pulsing pump + rotating pads -> scrub) followed by the dry stages;
+  byte0=`0x0d` ("Mop pad cleaning") through the wash portion.
+
+Only trigger a wash when docked + attended - it pumps water into the base. The pads
+do NOT rotate while docked in vacuum mode 0x03 (mop mode 00). **Verified end-to-end
+live**: `/set_station 1` -> the LCD walks dehydrating 1/4..4/4 with the fan on;
+`/set_station 0` aborts it (fan off, back to "100%"). No `0x25` frame is used on this
+dock; the nav-mode idle heartbeat uses `byte7=0x04` (mcud value), dock commands
+`byte7=0x02`.
+
+### The dock is a second MCU (below the `0x26` frame)
+
+The `0x26` frame above is only Layer 1 (`ava` -> robot MCU over `ttyS4`). The robot
+MCU is a *bridge*: it re-encodes dock commands and sends them to a **separate
+microcontroller inside the dock** over a sub-GHz **RF** link (the dock has its own
+GD32 MCU, LCD, wash/dry pumps + heater + fan, radio and ymodem bootloader). The
+robot MCU <-> dock MCU frame is `AA 55 | len | cmd | payload | crc16 | 0D 0A`
+(CRC-16, CR/LF trailer); `cmd 0x80` is the dock control/display frame (9-byte
+payload = screen code, UI set, progress %, status) and `cmd 0x01` + `"BT"` triggers
+the dock's OTA bootloader. This second layer, the dock LCD (`Ux.bin` images on the
+dock's FAT32), and how the dock firmware (`/UIMA.bin` / `/UIMB.bin`) is flashed are
+reverse-engineered in full in
+[`VacuumTiger/dreame-w10/docs/DOCK_PROTOCOL.md`](../../VacuumTiger/dreame-w10/docs/DOCK_PROTOCOL.md).
+(The earlier "over the charging contacts" description of this link was an untested
+assumption; the firmware shows a real radio. The exact carrier — RF vs. a
+charging-pin serial link when docked — is not yet confirmed on the wire.)
+
+### Driving the dock LCD status (`/set_dock_screen`)
+
+The dock's LCD status is chosen by the **`0x26` frame's byte0** (the dock "mode").
+Traced in the robot MCU (`mcu.bin`): the ttyS4 `0x26` payload feeds `FUN_08015866`,
+which fills a dock-state struct (`dst[0]=byte0` mode, `dst[1..3]=byte1..3` params,
+`dst[6]=byte6*4+1` actuator mask, percent from `byte7`); a periodic task
+`FUN_0801679c` derives the screen code from `byte0` and packs the 9-byte `cmd 0x80`
+payload the MCU relays to the dock (`FUN_08009238`). So byte0 is what the dock
+renders. Known values: `0x14` idle, `0x0d` wash, `0x0e` dry (the ones we send for
+`/set_station`); the dock firmware has many more screen codes (see
+[`DOCK_PROTOCOL.md`](../../VacuumTiger/dreame-w10/docs/DOCK_PROTOCOL.md)).
+
+`ros2dreame` exposes this as **`/set_dock_screen`** (`std_msgs/UInt8`): while the
+dock is idle (`/set_station 0`), a non-zero value sends an **idle-shaped `0x26`**
+(`[code,0,0,0,0,0,0,0x02]` — no pump/fan, byte6=0) with byte0 = the code, so the
+robot MCU relays it and the LCD shows that screen; `0` leaves the dock alone. It is
+ignored while a wash/dry is running (those drive the screen themselves).
+`src/direct.rs` (`set_dock_screen`, the `0x26` idle branch).
+
+For full manual control there is also **`/set_dock_frame`** (`std_msgs/UInt8MultiArray`):
+its first 8 bytes are sent verbatim as the idle `0x26` (overrides `/set_dock_screen`),
+so you can drive byte0 = screen, byte7 = progress, etc. by hand. Caution: byte6 != 0
+can start the dock pump/fan.
+
+**byte0 -> screen table (captured live).** The full mapping is in
+[`DOCK_PROTOCOL.md`](../../VacuumTiger/dreame-w10/docs/DOCK_PROTOCOL.md#byte0---dock-lcd-screen-verified-live-r2104-w10-dock)
+- e.g. `0x03` Cleaning, `0x0c` 100%/charging, `0x0d` mop-wash, `0x0e` mop-dry,
+`0x11` returning-to-wash, `0x17..0x21` the tank/child-lock/exception/"Mapping" alerts.
+The dock LCD is on no camera, so it was read off the panel by hand. To re-capture or
+extend it, with the robot **docked + idle** and ros2dreame running, sweep the codes
+and watch the dock:
+```
+make dock-sweep                 # sweeps /set_dock_screen over candidate codes
+DWELL=12 CODES="3 4 6 23 29" make dock-sweep   # focus a subset
+```
+**DDS gotcha (learned live):** a one-shot `ros2 topic pub --once` (and short
+`-r`/`timeout` runs) frequently **drops** against the robot's RustDDS - the
+FastDDS<->RustDDS discovery isn't done before the process exits, so the message
+never lands and the screen doesn't change. `dock-sweep.sh` therefore uses a
+**persistent rclpy publisher** (one node, ~2 s discovery, then holds each code a few
+seconds). Publish the same way by hand if scripting it.
+`host/dock-sweep.sh` is the sweep. The dock's screen-code classes (which file each
+code loads) are in [`DOCK_PROTOCOL.md`](../../VacuumTiger/dreame-w10/docs/DOCK_PROTOCOL.md);
+the ava-side status -> screen-code logic lives in `node_aether.so` `SendCleanDockMsg`
+(too large to extract cleanly - the live sweep is faster). Same method that produced
+the `0x26` wash/dry table.
 
 ## What the MCU REPORTS (decoded -> ROS 2)
 

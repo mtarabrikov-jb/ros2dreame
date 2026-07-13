@@ -38,13 +38,26 @@ Working, ava OFF, one binary (verified on the robot -> a Jazzy container):
 - **actuator control** `/set_{fan,side_brush,main_brush,mop}` `std_msgs/UInt8`
   (0 = off, ~1-150 = level -> the SetCleaning frame). `mop` = the two rotating mop
   pads (byte[3]); the robot has no water pump. Publish from a GUI to toggle.
-- **base station (dock) control** `/set_station` `std_msgs/UInt8`: 0 = idle/stop,
-  1 = dry the mop pads (dock fan), 2 = **run the full mop-wash cycle** (a self-timed
-  state machine replayed from ava: wet wash with a pulsing pump + rotating pads ->
-  scrub -> dock drying fan, then idle; `WASH_STEPS` in `src/direct.rs`). Driven via
-  the `0x26` frame (pump/fan) + SetCleaning (pads); RE'd from ava, see
+- **base station (dock) control** `/set_station` `std_msgs/UInt8`: 0 = idle/**stop**,
+  1 = **dry** the mop pads (dock fan/heater; the LCD walks "dehydrating 1/4..4/4" via
+  `DRY_SCREENS`), 2 = **run the full mop-wash cycle** (a self-timed state machine
+  replayed from ava: wet wash with a pulsing pump + rotating pads -> scrub -> the dry
+  stages; `WASH_STEPS` in `src/direct.rs`). Driven via the `0x26` frame (pump/fan +
+  byte0=dock LCD screen) + SetCleaning (pads); RE'd from ava, see
   [docs/MCU.md](docs/MCU.md). Only run wash docked + attended - it pumps water into
-  the base; `/set_station 0` aborts.
+  the base. **`/set_station 0` aborts** a running wash/dry - it streams ava's exact
+  `0x15` stop frame (a `0x14` idle does not stop a dry; verified live). Verified
+  end-to-end on the robot: start dry -> LCD animates 1/4..4/4 -> `0` aborts it.
+- **dock LCD status** `/set_dock_screen` `std_msgs/UInt8`: sets the status screen the
+  base station shows on its own LCD (the `0x26` byte0 "mode" the dock renders; the
+  robot MCU relays it to the dock over RF). Non-zero while idle sends a safe
+  idle-shaped `0x26` (no pump/fan) with that screen code; `0` leaves the dock alone;
+  ignored during a wash/dry. Known codes `0x14` idle / `0x0d` wash / `0x0e` dry; more
+  in the dock RE ([docs/MCU.md](docs/MCU.md)). byte0->screen mapping beyond those is
+  experimental - drive it and watch the panel (`make dock-sweep`).
+- **raw dock frame** `/set_dock_frame` `std_msgs/UInt8MultiArray`: first 8 bytes ->
+  the `0x26` payload verbatim (overrides `/set_dock_screen` while idle) - full manual
+  control for RE (byte0=screen, byte7=progress). Caution: byte6 != 0 runs the pump/fan.
 - **turret control** `/set_turret` `std_msgs/Bool`: true = drive state (turret +
   `/scan` + IR, RGB drops), false = park state (turret off, both cameras). In
   `W10_AUTO` it takes manual control (pauses the motion auto-switch); `/set_auto`

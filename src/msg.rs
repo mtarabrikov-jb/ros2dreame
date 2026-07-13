@@ -124,6 +124,13 @@ pub struct Int16MultiArray {
     pub data: Vec<i16>,
 }
 
+/// std_msgs/UInt8MultiArray
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct UInt8MultiArray {
+    pub layout: MultiArrayLayout,
+    pub data: Vec<u8>,
+}
+
 // --- geometry_msgs ---
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
