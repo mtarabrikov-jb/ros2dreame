@@ -145,6 +145,12 @@ the `0x26` wash/dry table.
 - `Triggers` (0x00): bumpers, wheel-float, cliff/floor sensors, dock, faults
   (drives the hazard gate; `/bumper`/`/cliff`/`/dock` planned).
 - `Battery` (0x2b): voltage / SoC / charging (`/battery` planned).
+- **Dock status** (`0x23`, 6 bytes, ~100 ms) -> the **base-station buttons**. byte0
+  bit0 = **Home**, bit2 = **Start/Stop**, bit4 (`0x10`) = a constant docked flag;
+  byte2 = tank flags (see MCU_PROTOCOL). ros2dreame publishes **`/dock_button_home`**
+  and **`/dock_button_start`** (`std_msgs/Bool`, true while held). Found live: at rest
+  0x23 = `10 00 00 00 00 42`; Home press -> `11 ..`, Start/Stop -> `14 ..`. (A generic
+  RX frame-change logger, `W10_RX_DEBUG=1` in `src/direct.rs`, located the frame.)
 - LDS packets (`/dev/ttyS3`) -> arc sweeps -> **`/scan`** (`sensor_msgs/LaserScan`,
   a ~126 deg rear arc, not 360).
 

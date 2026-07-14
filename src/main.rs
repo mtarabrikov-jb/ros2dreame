@@ -259,6 +259,16 @@ fn main() {
         let t = mk_pub(&mut node, "/fault", "fan", "std_msgs", "Bool");
         node.create_publisher::<msg::Bool>(&t, None).expect("fan fault pub")
     };
+    // Base-station buttons (0x23 dock-status byte0: bit0=Home, bit2=Start/Stop;
+    // verified live). true while held.
+    let home_pub = {
+        let t = mk_pub(&mut node, "/", "dock_button_home", "std_msgs", "Bool");
+        node.create_publisher::<msg::Bool>(&t, None).expect("home button pub")
+    };
+    let start_pub = {
+        let t = mk_pub(&mut node, "/", "dock_button_start", "std_msgs", "Bool");
+        node.create_publisher::<msg::Bool>(&t, None).expect("start button pub")
+    };
     let currents_pub = {
         let t = mk_pub(&mut node, "/", "motor_currents", "std_msgs", "Int16MultiArray");
         node.create_publisher::<msg::Int16MultiArray>(&t, None).expect("currents pub")
@@ -477,6 +487,10 @@ fn main() {
                 let _ = bumper_pub.publish(msg::Bool { data: bumper });
                 let _ = cliff_pub.publish(msg::Bool { data: cliff });
                 let _ = fan_oc_pub.publish(msg::Bool { data: fan_oc });
+            }
+            Tap::DockButton { home, start } => {
+                let _ = home_pub.publish(msg::Bool { data: home });
+                let _ = start_pub.publish(msg::Bool { data: start });
             }
             Tap::Currents(c) => {
                 // Decimate to ~5 Hz: the MCU streams currents at 50 Hz, but 6 topics

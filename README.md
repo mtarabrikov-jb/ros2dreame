@@ -28,6 +28,9 @@ Working, ava OFF, one binary (verified on the robot -> a Jazzy container):
 
 - `/imu` `sensor_msgs/Imu`, `/battery` `sensor_msgs/BatteryState`,
   `/dock` `/bumper` `/cliff` `std_msgs/Bool` (from Triggers)
+- **base-station buttons** `/dock_button_home` `/dock_button_start` `std_msgs/Bool`
+  (true while held) - from the `0x23` dock-status frame byte0 (bit0 = Home, bit2 =
+  Start/Stop; verified live). See [docs/MCU.md](docs/MCU.md).
 - **motor currents** `/current/{wheel_left,wheel_right,main_brush,side_brush,load}`
   `std_msgs/Int16` (also combined in `/motor_currents` `Int16MultiArray`)
 - **state** `/state/turret` `Bool` + `/state/mode` `String` (DRIVING/PARKED) +

@@ -231,6 +231,10 @@ fn rx_loop(mut rd: File, w: Arc<Mutex<File>>, sh: Arc<Shared>, tx: Sender<Tap>) 
     let mut buf = [0u8; 4096];
     let mut gyro_z_dps: f32 = 0.0;
     let (mut wl, mut wr, mut load) = (0i16, 0i16, 0i16);
+    // RX frame-change debug (W10_RX_DEBUG=1): log a frame only when its payload
+    // changes vs the last of that type - finds which frame/bit a button toggles.
+    let rx_debug = std::env::var("W10_RX_DEBUG").is_ok();
+    let mut last_frame: std::collections::HashMap<u8, Vec<u8>> = std::collections::HashMap::new();
     while !sh.shutdown.load(Ordering::Relaxed) {
         let n = match rd.read(&mut buf) {
             Ok(0) => continue,
@@ -243,6 +247,21 @@ fn rx_loop(mut rd: File, w: Arc<Mutex<File>>, sh: Arc<Shared>, tx: Sender<Tap>) 
         for &b in &buf[..n] {
             let Some(body) = sc.push(b) else { continue };
             let Ok((typ, payload)) = parse_body(body) else { continue };
+            // skip the high-rate counter frames (they change every frame -> spam)
+            if rx_debug
+                && !matches!(typ, 0x01 | 0x02 | 0x03 | 0x05 | 0x12 | 0x2c)
+                && last_frame.get(&typ).map(Vec::as_slice) != Some(payload)
+            {
+                last_frame.insert(typ, payload.to_vec());
+                let hex: String = payload.iter().map(|b| format!("{:02x}", b)).collect();
+                eprintln!("RXD type=0x{:02x} len={} [{}]", typ, payload.len(), hex);
+            }
+            // Base-station buttons: 0x23 dock-status frame byte0 (bit0=Home,
+            // bit2=Start/Stop; bit4=0x10 is a constant docked flag). Verified live.
+            if typ == 0x23 && !payload.is_empty() {
+                let b0 = payload[0];
+                let _ = tx.send(Tap::DockButton { home: b0 & 0x01 != 0, start: b0 & 0x04 != 0 });
+            }
             if typ == T_PING && payload.len() >= 4 {
                 send(&w, T_PING, &payload[..4]); // echo the ping's timestamp
                 continue;

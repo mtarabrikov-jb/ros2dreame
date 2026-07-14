@@ -42,6 +42,9 @@ pub enum Tap {
     Imu(Box<Imu>),
     Battery(Box<BatteryState>),
     Triggers { dock: bool, bumper: bool, cliff: bool, fan_oc: bool },
+    /// Base-station buttons, from the `0x23` dock-status frame byte0: bit0 = Home,
+    /// bit2 = Start/Stop (verified live by pressing each on an r2104 dock).
+    DockButton { home: bool, start: bool },
     /// [wheel_left, wheel_right, main_brush, side_brush, load] raw i16 currents.
     Currents([i16; 5]),
     /// Actuator/turret state telemetry (published periodically, not event-driven).
