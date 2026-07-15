@@ -13,6 +13,7 @@ mod cam;
 mod direct;
 mod msg;
 mod tap;
+mod timesync;
 
 use std::thread;
 
@@ -97,6 +98,13 @@ fn odom_tf(o: &Odometry) -> TFMessage {
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
+    // Sync the robot clock to UTC BEFORE creating the DDS participant (below), so
+    // RustDDS starts with the correct time and tf2 on the host stops dropping our
+    // messages; then keep it there by slewing in the background. W10_NO_TIMESYNC
+    // disables it. See src/timesync.rs.
+    timesync::initial_step();
+    timesync::spawn_daemon();
 
     let (tx, rx) = std::sync::mpsc::channel::<Tap>();
 

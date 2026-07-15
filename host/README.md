@@ -55,8 +55,9 @@ publishes (`odom -> base_link -> laser`) and opens rviz with `rviz/slam.rviz` (t
 - ros2dreame already does the job the makerspet tutorial splits across four nodes
   (`vacuum_bridge` + `robot_state_publisher` + `ekf`): it publishes `/scan` and the
   full `odom -> base_link -> laser` TF, so only `slam_toolbox` is added on top.
-- Caveat: the W10 LDS is a **~123 deg rear arc** (not 360), so the map is coarser
-  than a 360 lidar (harder loop-closure, more drift). Config: `slam/dreame_slam.yaml`.
+- The W10 LDS is a **full 360 deg** scan (8 m; verified live: 359 beams / 358 deg,
+  valid returns all around), so loop-closure and mapping are as good as any 360
+  lidar. Config: `slam/dreame_slam.yaml`.
 
 ## Autonomous navigation & exploration (Nav2)
 
@@ -73,8 +74,8 @@ publishes (`odom -> base_link -> laser`) and opens rviz with `rviz/slam.rviz` (t
     explore_lite is the ROS 2 port of the classic `m-explore`. It is **not packaged
     for Jazzy** - the image builds it from source (`Dockerfile`); `make build` to
     rebuild after pulling.
-  - Caveat: the ~123 deg LDS arc makes exploration slower/coarser than a 360 lidar;
-    `min_frontier_size` is lowered to compensate.
+  - The LDS is a full 360 deg scan, so frontier detection has full surround
+    coverage; `min_frontier_size` is kept modest for a home-scale map.
 
 ## Fall & contact protection (hazard -> costmap)
 
@@ -101,20 +102,24 @@ ROS 2 stamps every message and tf2 rejects transforms whose time is outside its
 buffer. If the **robot and this host clocks differ by more than ~1 s**, tf2 in the
 container drops the robot's `/scan` + `/tf` ("timestamp earlier than all the data in
 the transform cache"), **SLAM never publishes a map**, and Nav2's costmaps never
-activate. The Dreame has no NTP client (only busybox `date`/`rdate`/`adjtimex`), so
-its clock drifts (~0.1 s/h) and starts off by seconds after a boot.
+activate. The Dreame has no NTP client (only busybox `date`/`rdate`/`adjtimex`) and
+its clock drifts (~0.1 s/h) and boots off by seconds.
 
-- **`make slam` / `make nav2` / `make explore` auto-run `make timesync` first** - a
-  one-shot `ssh root@$ROBOT date -s` that sets the robot clock to this host. Set the
-  robot address via `export ROBOT=...` or a local, gitignored `host/.env` (copy
-  `host/.env.example`); the IP is never committed. The drift is slow, so one sync
-  lasts hours; the widened `transform_tolerance` (explore 1.5 s, slam 1.0 s) absorbs
-  the residual.
-- Do **not** run a continuous clock-stepping loop - repeatedly stepping the robot's
-  system clock desyncs the FastDDS<->RustDDS participants and drops robot<->container
-  comms. Sync once; that is enough.
-- `make timesync` needs ssh access from this host to the robot; without it, SLAM/Nav2
-  will silently fail to map (the target only warns).
+- **ros2dreame syncs its own clock** - no action needed. At startup, before it
+  creates its DDS participant, it queries public NTP (by IP - the robot has internet
+  but no DNS) and hard-**steps** the clock to UTC; then a background thread **slews**
+  it (adjtime, never steps) to hold it there. Pre-DDS stepping means RustDDS starts
+  with the right time; slewing keeps ROS/DDS timestamps monotonic afterwards. Since
+  this host is NTP-synced too, robot == UTC == host. Disable with `W10_NO_TIMESYNC`.
+  See `src/timesync.rs`. The widened `transform_tolerance` (explore 1.5 s, slam
+  1.0 s) absorbs the sub-second residual.
+- Do **not** run a continuous clock-stepping loop (e.g. `while true; ssh date -s`) -
+  repeatedly stepping the robot's system clock, especially backward, desyncs the
+  FastDDS<->RustDDS participants and drops robot<->container comms. Slew, don't step.
+- **`make timesync` is a fallback only** - for when the robot has no internet, it
+  does a one-shot `ssh root@$ROBOT date -s` from this host. Set `ROBOT` via
+  `export ROBOT=...` or a local gitignored `host/.env` (copy `host/.env.example`);
+  the IP is never committed. Not needed when the robot has internet.
 
 ## Notes
 

@@ -42,7 +42,7 @@ foxglove:                   ## foxglove_bridge WebSocket (ws://localhost:8765) -
 	-$(DC) exec -T $(SVC) pkill -9 -f '[f]oxglove_bridge' 2>/dev/null || true
 	$(GUI) '$(SRC) ros2 run foxglove_bridge foxglove_bridge --ros-args -p port:=8765 -p address:=0.0.0.0 $(LOG)'
 	@echo ">> foxglove_bridge on ws://localhost:8765 -- in app.foxglove.dev import host/foxglove/{full,slam,ros2dreame}.json (full = map + all controls in one window)"
-timesync:                   ## one-shot: sync robot clock to THIS host (fixes tf2/SLAM; auto-run by slam/nav2/explore). Set ROBOT via env or host/.env
+timesync:                   ## FALLBACK only: one-shot host->robot clock step (if the robot has no internet). Normally ros2dreame self-syncs via NTP. Set ROBOT via env or host/.env
 	@if [ -z "$(ROBOT)" ]; then \
 	  echo ">> WARN: ROBOT not set (export ROBOT=... or create host/.env) - skipping clock sync; SLAM/Nav2 may drop the robot's tf and never map."; \
 	elif ssh -o ConnectTimeout=8 root@$(ROBOT) "date -u -s @$$(date -u +%s)" >/dev/null 2>&1; then \
@@ -50,20 +50,20 @@ timesync:                   ## one-shot: sync robot clock to THIS host (fixes tf
 	else \
 	  echo ">> WARN: could not ssh root@\$$ROBOT to sync clock - SLAM/Nav2 may drop the robot's tf. Check ROBOT / ssh."; \
 	fi
-slam: timesync              ## slam_toolbox live map (builds a FRESH map) + rviz. Reuse a saved map: make localize
+slam:                     ## slam_toolbox live map (builds a FRESH map) + rviz. Reuse a saved map: make localize
 	$(GUI) '$(SRC) ros2 launch slam_toolbox online_async_launch.py slam_params_file:=/cfg/slam/dreame_slam.yaml $(LOG)'
 	$(GUI) '$(SRC) rviz2 -d /cfg/rviz/slam.rviz $(LOG)'
 	@echo ">> slam (fresh map) + rviz up. Turret must spin for /scan. Reuse a saved map: make localize. Logs: make logs"
-localize: timesync          ## load + drive on the saved map WITHOUT changing it (NAME=dreame_map) + rviz
+localize:                 ## load + drive on the saved map WITHOUT changing it (NAME=dreame_map) + rviz
 	$(DC) exec -T $(SVC) bash -c 'sed "s|mode: mapping|mode: localization\n    map_file_name: /cfg/maps/$(NAME)\n    map_start_pose: [0.0, 0.0, 0.0]|" /cfg/slam/dreame_slam.yaml > /tmp/dreame_localize.yaml'
 	$(GUI) '$(SRC) ros2 launch slam_toolbox localization_launch.py slam_params_file:=/tmp/dreame_localize.yaml $(LOG)'
 	$(GUI) '$(SRC) rviz2 -d /cfg/rviz/slam.rviz $(LOG)'
 	@echo ">> LOCALIZATION + rviz up: saved map is fixed (NOT modified). Set start pose via rviz 2D Pose Estimate. Stop mapping (make slam) first - they conflict. Logs: make logs"
-nav2: timesync              ## Nav2 autonomous navigation on the saved map (NAME=dreame_map) + rviz
+nav2:                     ## Nav2 autonomous navigation on the saved map (NAME=dreame_map) + rviz
 	$(GUI) '$(SRC) ros2 launch /cfg/nav2/nav2_minimal.launch.py map:=/cfg/maps/$(NAME).yaml params_file:=/cfg/nav2/nav2_params.yaml $(LOG)'
 	$(GUI) '$(SRC) rviz2 -d /opt/ros/jazzy/share/nav2_bringup/rviz/nav2_default_view.rviz $(LOG)'
 	@echo ">> Nav2 up (map=$(NAME)). In rviz: '2D Pose Estimate' = where the robot is, then 'Nav2 Goal' = destination. Turret must spin for /scan. Stop make slam/localize first. Logs: make logs"
-explore: timesync           ## autonomous frontier exploration: slam + Nav2 (slam mode) + explore_lite + rviz
+explore:                  ## autonomous frontier exploration: slam + Nav2 (slam mode) + explore_lite + rviz
 	$(GUI) '$(SRC) ros2 launch slam_toolbox online_async_launch.py slam_params_file:=/cfg/slam/dreame_slam.yaml $(LOG)'
 	$(GUI) '$(SRC) ros2 launch /cfg/nav2/nav2_minimal.launch.py slam:=true $(LOG)'
 	$(GUI) '$(SRCX) ros2 run explore_lite explore --ros-args --params-file /cfg/explore/explore.yaml $(LOG)'
