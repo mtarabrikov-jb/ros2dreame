@@ -99,7 +99,17 @@ controller_server:
       xy_goal_tolerance: 0.25
       yaw_goal_tolerance: 0.25
     FollowPath:
-      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      # RotationShimController wraps RPP: it first rotates the robot in place to face
+      # the path heading (fixing the bursty stalls where RPP could not reorient toward
+      # a frontier behind/beside it), then hands off to RPP to drive. RPP's own
+      # use_rotate_to_heading stays false (it was buggy); the shim does the rotation.
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      angular_dist_threshold: 0.785        # path heading >45 deg off -> rotate in place first
+      forward_sampling_distance: 0.4       # sample the path heading this far ahead
+      rotate_to_goal_heading: false
+      simulate_ahead_time: 1.0             # collision-check the in-place rotation
+      # --- primary controller (RPP) params, read from this same namespace ---
       desired_linear_vel: 0.12
       lookahead_dist: 0.4
       min_lookahead_dist: 0.2
@@ -118,9 +128,9 @@ controller_server:
       # slow differential robots. false = pure-pursuit arc motion; the robot drives
       # (verified live: autonomous exploration moves and grows the map).
       use_rotate_to_heading: false
-      rotate_to_heading_angular_vel: 0.8
+      rotate_to_heading_angular_vel: 1.0    # shim in-place rotation speed (RPP ignores it)
       rotate_to_heading_min_angle: 0.6
-      max_angular_accel: 2.0
+      max_angular_accel: 3.0                # shim + RPP angular accel limit
       allow_reversing: false
       max_robot_pose_search_dist: 10.0
       use_collision_detection: true

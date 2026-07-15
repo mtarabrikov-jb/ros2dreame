@@ -10,7 +10,7 @@
     costmap_updates_topic: map_updates
     visualize: true                    # publishes /explore/frontiers markers for rviz
     planner_frequency: 0.33            # re-plan the next frontier ~every 3 s
-    progress_timeout: 30.0             # abandon a frontier Nav2 can't reach in 30 s
+    progress_timeout: 45.0             # abandon a frontier Nav2 can't reach in 45 s (give the rotation shim + RPP time)
     potential_scale: 3.0               # weight: prefer nearer frontiers
     orientation_scale: 0.0
     gain_scale: 1.0                    # weight: prefer larger (higher-info) frontiers
