@@ -18,7 +18,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-jazzy-foxglove-bridge \
         ros-jazzy-navigation2 \
         ros-jazzy-nav2-bringup \
+        git \
+        python3-colcon-common-extensions \
+        python3-rosdep \
     && rm -rf /var/lib/apt/lists/*
 
-# Source ROS in every shell (docker exec bypasses the entrypoint).
-RUN echo 'source /opt/ros/jazzy/setup.bash' >> /root/.bashrc
+# explore_lite (m-explore-ros2) - autonomous frontier exploration, the maintained
+# alternative to auto_mapper. Not packaged for Jazzy, so build from source. It runs
+# on top of Nav2 (NavigateToPose) + slam_toolbox (/map); see host/README.md and
+# host/explore/explore.yaml. Deps (nav2_costmap_2d, nav2_msgs) come from navigation2.
+RUN . /opt/ros/jazzy/setup.sh \
+    && mkdir -p /opt/explore_ws/src \
+    && git clone --depth 1 https://github.com/robo-friends/m-explore-ros2.git /opt/explore_ws/src/m-explore-ros2 \
+    && cd /opt/explore_ws \
+    && (rosdep update || true) \
+    && (rosdep install --from-paths src --ignore-src -y || true) \
+    && colcon build --merge-install \
+    && rm -rf build log src/m-explore-ros2/.git
+
+# Source ROS + the explore_lite overlay in every shell (docker exec bypasses the entrypoint).
+RUN echo 'source /opt/ros/jazzy/setup.bash' >> /root/.bashrc \
+    && echo 'source /opt/explore_ws/install/setup.bash' >> /root/.bashrc

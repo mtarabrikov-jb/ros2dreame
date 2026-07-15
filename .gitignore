@@ -2,3 +2,5 @@
 **/*.rs.bk
 /cam-helper/w10-camd
 .idea/
+# Local, machine-specific config - never commit (e.g. the robot IP for make timesync)
+.env

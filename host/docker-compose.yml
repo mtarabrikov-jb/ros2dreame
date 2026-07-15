@@ -34,5 +34,6 @@ services:
       - ../rviz:/cfg/rviz:ro
       - ./slam:/cfg/slam:ro
       - ./nav2:/cfg/nav2:ro
+      - ./explore:/cfg/explore:ro
       - ./maps:/cfg/maps          # slam map output (rw) - `make save-map` writes here
     command: sleep infinity

@@ -1,0 +1,21 @@
+# explore_lite (m-explore-ros2) for ros2dreame - autonomous frontier exploration,
+# the maintained alternative to auto_mapper. Reads slam_toolbox's /map, finds the
+# frontiers between mapped and unknown space, and sends the nearest as a Nav2
+# NavigateToPose goal; repeats until the map is closed, then returns home.
+# Run with: make explore  (slam + Nav2 slam:=true + this node). See host/README.md.
+/**:
+  ros__parameters:
+    robot_base_frame: base_link
+    costmap_topic: map                 # slam_toolbox occupancy grid
+    costmap_updates_topic: map_updates
+    visualize: true                    # publishes /explore/frontiers markers for rviz
+    planner_frequency: 0.33            # re-plan the next frontier ~every 3 s
+    progress_timeout: 30.0             # abandon a frontier Nav2 can't reach in 30 s
+    potential_scale: 3.0               # weight: prefer nearer frontiers
+    orientation_scale: 0.0
+    gain_scale: 1.0                    # weight: prefer larger (higher-info) frontiers
+    transform_tolerance: 1.5           # WiFi/tf jitter + robot<->host clock-sync residual
+    # The W10 LDS is a narrow ~123 deg rear arc, so frontiers are smaller/noisier
+    # than a 360 lidar - keep min_frontier_size modest so it still finds them.
+    min_frontier_size: 0.5
+    return_to_init: true               # drive back to the start pose when done

@@ -4,8 +4,15 @@
 # abort the bringup. bond_timeout is raised so the manager doesn't tear the stack
 # down under CPU / WiFi-/tf jitter. The controller (RPP) publishes /cmd_vel
 # directly (no velocity_smoother / collision_monitor in the cmd_vel path).
+#
+# Args:
+#   slam:=false   localization on a saved map (map_server + amcl). Default.
+#   slam:=true    NO map_server/amcl - use with `make slam` (slam_toolbox provides
+#                 /map + the map->odom TF). This is the exploration/mapping setup.
+#   hazard:=true  run hazard_costmap.py (cliff/wheel-drop/bumper -> costmap). Default.
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -13,20 +20,30 @@ from launch_ros.actions import Node
 def generate_launch_description():
     params = LaunchConfiguration("params_file")
     map_yaml = LaunchConfiguration("map")
+    slam = LaunchConfiguration("slam")
+    hazard = LaunchConfiguration("hazard")
     lm = {"autostart": True, "use_sim_time": False, "bond_timeout": 20.0, "attempt_respawn_reconnection": True}
 
     return LaunchDescription([
         DeclareLaunchArgument("params_file", default_value="/cfg/nav2/nav2_params.yaml"),
         DeclareLaunchArgument("map", default_value="/cfg/maps/dreame_map.yaml"),
+        DeclareLaunchArgument("slam", default_value="false"),
+        DeclareLaunchArgument("hazard", default_value="true"),
 
-        # --- localization: map_server + amcl ---
+        # --- localization: map_server + amcl (skipped when slam:=true) ---
         Node(package="nav2_map_server", executable="map_server", name="map_server",
-             output="screen", parameters=[params, {"yaml_filename": map_yaml}]),
+             output="screen", parameters=[params, {"yaml_filename": map_yaml}],
+             condition=UnlessCondition(slam)),
         Node(package="nav2_amcl", executable="amcl", name="amcl",
-             output="screen", parameters=[params]),
+             output="screen", parameters=[params], condition=UnlessCondition(slam)),
         Node(package="nav2_lifecycle_manager", executable="lifecycle_manager",
              name="lifecycle_manager_localization", output="screen",
-             parameters=[{**lm, "node_names": ["map_server", "amcl"]}]),
+             parameters=[{**lm, "node_names": ["map_server", "amcl"]}],
+             condition=UnlessCondition(slam)),
+
+        # --- hazard sensors -> costmap obstacles (cliff / wheel-drop / bumper) ---
+        ExecuteProcess(cmd=["python3", "/cfg/nav2/hazard_costmap.py"],
+                       output="screen", condition=IfCondition(hazard)),
 
         # --- navigation: controller + smoother + planner + behaviors + bt ---
         Node(package="nav2_controller", executable="controller_server", name="controller_server",

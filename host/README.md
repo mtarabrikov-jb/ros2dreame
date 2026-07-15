@@ -58,6 +58,64 @@ publishes (`odom -> base_link -> laser`) and opens rviz with `rviz/slam.rviz` (t
 - Caveat: the W10 LDS is a **~123 deg rear arc** (not 360), so the map is coarser
   than a 360 lidar (harder loop-closure, more drift). Config: `slam/dreame_slam.yaml`.
 
+## Autonomous navigation & exploration (Nav2)
+
+- **`make nav2`** - Nav2 on a **saved** map (`map_server` + `amcl`): set the start
+  pose (rviz `2D Pose Estimate`), then send goals (`Nav2 Goal`). The turret must
+  spin for `/scan`. Config: `nav2/nav2_params.yaml`, launch: `nav2/nav2_minimal.launch.py`.
+- **`make explore`** - autonomous frontier exploration with **`explore_lite`**
+  (m-explore-ros2): it drives to the boundary between mapped and unknown space,
+  repeats until the map is closed, then returns home (`return_to_init`). Launches
+  slam (fresh map) + Nav2 in SLAM mode (`slam:=true` = no map_server/amcl) + the
+  explore node + rviz. Turret must spin. Config: `explore/explore.yaml`.
+  - This is the maintained alternative to **auto_mapper** (a ~450-line demo node
+    with naive first-frontier pick and no unreachable-frontier blacklist).
+    explore_lite is the ROS 2 port of the classic `m-explore`. It is **not packaged
+    for Jazzy** - the image builds it from source (`Dockerfile`); `make build` to
+    rebuild after pulling.
+  - Caveat: the ~123 deg LDS arc makes exploration slower/coarser than a 360 lidar;
+    `min_frontier_size` is lowered to compensate.
+
+## Fall & contact protection (hazard -> costmap)
+
+Nav2 has no concept of a hole in the floor, or a bump felt but not seen by the
+laser. `nav2/hazard_costmap.py` bridges ros2dreame's three MCU hazard sensor groups
+into Nav2 costmap obstacles so the planner avoids them:
+
+- `/cliff/flags` (6 drop sensors) + `/wheel_drop/flags` (2 drive-wheel drops) ->
+  `/cliff/obstacles` + `/wheel_drop/obstacles` -> a **persistent drop layer**
+  (`cliff_layer`, local + global, `clearing:False`): a seen ledge/stair stays avoided.
+- `/bumper/flags` (2 front bumpers) -> `/bumper/obstacles` -> a **transient contact
+  layer** (`bump_layer`, local only): the rolling window expires it as the robot
+  moves off (a bumped chair is not a permanent wall).
+- Runs automatically inside `make nav2` / `make explore` (launch arg `hazard:=true`).
+  Standalone for testing: **`make hazard`**.
+- This is the *planning*-level guard; the *immediate* stop is already on the robot
+  (ros2dreame's MCU hazard gate zeroes forward speed the instant a cliff/bump fires).
+- The per-sensor mounting offsets in `hazard_costmap.py` are **approximate** - measure
+  the W10 and override via the `*_offsets_x/_y` ROS params for precise mark placement.
+
+## Clock sync (required for SLAM / Nav2 / explore)
+
+ROS 2 stamps every message and tf2 rejects transforms whose time is outside its
+buffer. If the **robot and this host clocks differ by more than ~1 s**, tf2 in the
+container drops the robot's `/scan` + `/tf` ("timestamp earlier than all the data in
+the transform cache"), **SLAM never publishes a map**, and Nav2's costmaps never
+activate. The Dreame has no NTP client (only busybox `date`/`rdate`/`adjtimex`), so
+its clock drifts (~0.1 s/h) and starts off by seconds after a boot.
+
+- **`make slam` / `make nav2` / `make explore` auto-run `make timesync` first** - a
+  one-shot `ssh root@$ROBOT date -s` that sets the robot clock to this host. Set the
+  robot address via `export ROBOT=...` or a local, gitignored `host/.env` (copy
+  `host/.env.example`); the IP is never committed. The drift is slow, so one sync
+  lasts hours; the widened `transform_tolerance` (explore 1.5 s, slam 1.0 s) absorbs
+  the residual.
+- Do **not** run a continuous clock-stepping loop - repeatedly stepping the robot's
+  system clock desyncs the FastDDS<->RustDDS participants and drops robot<->container
+  comms. Sync once; that is enough.
+- `make timesync` needs ssh access from this host to the robot; without it, SLAM/Nav2
+  will silently fail to map (the target only warns).
+
 ## Notes
 
 - The robot must be running ros2dreame (`deploy/direct-mode.sh start` for nav, or
