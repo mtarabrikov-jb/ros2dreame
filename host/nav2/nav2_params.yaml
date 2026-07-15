@@ -110,9 +110,14 @@ controller_server:
       min_approach_linear_velocity: 0.03
       approach_velocity_scaling_dist: 0.4
       use_regulated_linear_velocity_scaling: true
-      regulated_linear_scaling_min_radius: 0.6
+      regulated_linear_scaling_min_radius: 0.25
       regulated_linear_scaling_min_speed: 0.04
-      use_rotate_to_heading: true
+      # MUST stay false. With rotate_to_heading on, RPP got stuck rotating in place
+      # and NEVER translated (commanded linear.x = 0 even for a straight goal into
+      # open space -> "Failed to make progress" every cycle) - a known RPP quirk on
+      # slow differential robots. false = pure-pursuit arc motion; the robot drives
+      # (verified live: autonomous exploration moves and grows the map).
+      use_rotate_to_heading: false
       rotate_to_heading_angular_vel: 0.8
       rotate_to_heading_min_angle: 0.6
       max_angular_accel: 2.0
@@ -132,7 +137,7 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      robot_radius: 0.18
+      robot_radius: 0.16
       transform_tolerance: 1.0
       plugins: ["voxel_layer", "cliff_layer", "bump_layer", "inflation_layer"]
       # Drop protection (persistent - also in global_costmap): cliff + wheel-drop
@@ -183,9 +188,14 @@ local_costmap:
           obstacle_min_range: 0.0
           inf_is_valid: false
       inflation_layer:
+        # Tuned for tight vacuum navigation. robot_radius is 0.16 (the W10 is ~0.175 m,
+        # trimmed a little for tight passages - the bumper + MCU hazard gate catch actual
+        # contact). A steep cost_scaling_factor makes the soft cost fall to near-zero just
+        # past the inscribed radius, so driving 10-20 cm from a wall / under furniture reads
+        # as normal, not "boxed in"; only cells within robot_radius of an obstacle stay lethal.
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.22
+        cost_scaling_factor: 10.0
+        inflation_radius: 0.18
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -218,7 +228,7 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
-      robot_radius: 0.18
+      robot_radius: 0.16
       transform_tolerance: 1.0
       resolution: 0.05
       track_unknown_space: true
@@ -270,9 +280,14 @@ global_costmap:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
       inflation_layer:
+        # Tuned for tight vacuum navigation. robot_radius is 0.16 (the W10 is ~0.175 m,
+        # trimmed a little for tight passages - the bumper + MCU hazard gate catch actual
+        # contact). A steep cost_scaling_factor makes the soft cost fall to near-zero just
+        # past the inscribed radius, so driving 10-20 cm from a wall / under furniture reads
+        # as normal, not "boxed in"; only cells within robot_radius of an obstacle stay lethal.
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.22
+        cost_scaling_factor: 10.0
+        inflation_radius: 0.18
       always_send_full_costmap: True
 
 # The yaml_filename does not need to be specified since it going to be set by defaults in launch.
