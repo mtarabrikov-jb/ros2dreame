@@ -34,7 +34,12 @@ const T_PING: u8 = 0x0f;
 pub struct Shared {
     start: Instant,
     shutdown: AtomicBool,
-    hazard: AtomicBool,
+    // Directional drive gate from the Triggers frame. hazard_fwd blocks forward
+    // motion (front bumper, front/mid cliff, or a wheel drop); hazard_rev blocks
+    // reverse (rear/mid cliff, or a wheel drop). Split so the robot can back AWAY
+    // from a front bump instead of being frozen against it.
+    hazard_fwd: AtomicBool,
+    hazard_rev: AtomicBool,
     lidar_on: AtomicBool,
     // observe mode: stop driving the MCU (no MotorCtrl, no nav frames, turret
     // off) so the robot stays "idle/docked" - the only state in which the
@@ -284,9 +289,17 @@ fn rx_loop(mut rd: File, w: Arc<Mutex<File>>, sh: Arc<Shared>, tx: Sender<Tap>) 
                     load = s.load;
                 }
                 Msg::Triggers(t) => {
-                    // bumpers/wheel-float (raw[0] bits 4-7) or any cliff (raw[1]).
-                    let hz = (t.raw[0] & 0xF0) != 0 || t.raw[1] != 0;
-                    sh.hazard.store(hz, Ordering::Relaxed);
+                    // Directional drive gate. raw[0]: bits 4/5 = front bumpers,
+                    // bits 6/7 = wheel drop (lift -> block both ways). raw[1] = 6
+                    // cliff sensors: bits 0-3 = front+mid (block forward), bits 1,2,4,5
+                    // = mid+rear (block reverse); mid (1,2, position unverified) blocks
+                    // both to be safe. So the robot can still back away from a front bump.
+                    let bumper = (t.raw[0] & 0x30) != 0;
+                    let wheel = (t.raw[0] & 0xC0) != 0;
+                    let cliff_fwd = (t.raw[1] & 0x0F) != 0; // bits 0-3: front-left/mid/mid/front-right
+                    let cliff_rev = (t.raw[1] & 0x36) != 0; // bits 1,2,4,5: mid + rear
+                    sh.hazard_fwd.store(bumper || wheel || cliff_fwd, Ordering::Relaxed);
+                    sh.hazard_rev.store(wheel || cliff_rev, Ordering::Relaxed);
                     let _ = tx.send(Tap::Triggers {
                         dock: t.dock_sta(),
                         bumper_bits: (t.left_bumper() as u8) | ((t.right_bumper() as u8) << 1),
@@ -518,8 +531,12 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
         } else {
             (0.0, 0.0)
         };
-        if sh.hazard.load(Ordering::Relaxed) && lin != 0.0 {
-            lin = 0.0; // never translate into a detected cliff/bump
+        // Directional hazard gate: block forward into a front bump/cliff, block
+        // reverse into a rear cliff - but still allow backing away from a front bump.
+        if lin > 0.0 && sh.hazard_fwd.load(Ordering::Relaxed) {
+            lin = 0.0;
+        } else if lin < 0.0 && sh.hazard_rev.load(Ordering::Relaxed) {
+            lin = 0.0;
         }
         if let Some(n) = encode_motor_ctrl(1, lin, rot, &mut mbuf) {
             if let Ok(mut f) = w.lock() {
@@ -587,7 +604,8 @@ pub fn run(mcu_path: &str, lds_path: &str, observe: bool, tx: Sender<Tap>) -> Ar
     let sh = Arc::new(Shared {
         start: Instant::now(),
         shutdown: AtomicBool::new(false),
-        hazard: AtomicBool::new(false),
+        hazard_fwd: AtomicBool::new(false),
+        hazard_rev: AtomicBool::new(false),
         // turret spins for /scan in nav mode only. W10_NO_TURRET forces it off
         // even in nav (still drive-capable, but no LDS/scan): used to test whether
         // the spinning LDS turret is what disrupts the OV8856/isp0 MIPI timing and

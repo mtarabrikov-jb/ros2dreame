@@ -40,10 +40,17 @@ HAZARDS = {
     "wheel_drop": ("/wheel_drop/flags", "/wheel_drop/obstacles", [
         (0.0, 0.15), (0.0, -0.15),
     ]),
+    # Bumper: the LDS missed this obstacle (below the scan plane / transparent), so on
+    # ANY bumper contact mark a WIDE front arc - not 2 narrow points the planner would
+    # just thread between and re-hit the same obstacle. Emitted whole on any bit.
     "bumper": ("/bumper/flags", "/bumper/obstacles", [
-        (0.17, 0.09), (0.17, -0.09),
+        (0.19, 0.0), (0.18, 0.09), (0.18, -0.09), (0.16, 0.16), (0.16, -0.16),
     ]),
 }
+
+# Hazards marked as the whole cluster on any bit set (vs one point per bit) - a bumper
+# hit means "a wall across my front", so mark the arc, not just the two contact points.
+ARC_ON_ANY = {"bumper"}
 
 
 class HazardCostmap(Node):
@@ -82,11 +89,14 @@ class HazardCostmap(Node):
     def _tick(self):
         for name, offsets, pub in self.sources:
             mask = self.masks[name]
-            points = [
-                (offsets[i][0], offsets[i][1], self.point_z)
-                for i in range(len(offsets))
-                if mask & (1 << i)
-            ]
+            if name in ARC_ON_ANY:
+                points = [(x, y, self.point_z) for x, y in offsets] if mask else []
+            else:
+                points = [
+                    (offsets[i][0], offsets[i][1], self.point_z)
+                    for i in range(len(offsets))
+                    if mask & (1 << i)
+                ]
             pub.publish(self._cloud(points))
 
     def _cloud(self, points):
