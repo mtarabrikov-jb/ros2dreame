@@ -40,11 +40,14 @@ HAZARDS = {
     "wheel_drop": ("/wheel_drop/flags", "/wheel_drop/obstacles", [
         (0.0, 0.15), (0.0, -0.15),
     ]),
-    # Bumper: the LDS missed this obstacle (below the scan plane / transparent), so on
-    # ANY bumper contact mark a WIDE front arc - not 2 narrow points the planner would
-    # just thread between and re-hit the same obstacle. Emitted whole on any bit.
+    # Bumper: the LDS missed this obstacle (below the scan plane / transparent). The
+    # W10's front bumper is FLAT with rounded corners, so mark a flat line across the
+    # front (corners pulled back slightly) - not a forward-bulging arc - on ANY bumper
+    # bit, so the whole front reads blocked (not 2 points the planner threads between).
+    # The immediate reaction is the ros2dreame bump-escape reflex (back off + turn);
+    # this mark just stops Nav2 re-planning straight back into the same spot.
     "bumper": ("/bumper/flags", "/bumper/obstacles", [
-        (0.19, 0.0), (0.18, 0.09), (0.18, -0.09), (0.16, 0.16), (0.16, -0.16),
+        (0.17, 0.0), (0.17, 0.07), (0.17, -0.07), (0.155, 0.14), (0.155, -0.14),
     ]),
 }
 

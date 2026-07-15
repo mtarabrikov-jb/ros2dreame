@@ -40,6 +40,11 @@ pub struct Shared {
     // from a front bump instead of being frozen against it.
     hazard_fwd: AtomicBool,
     hazard_rev: AtomicBool,
+    // Front bumper contact (raw[0] bits 4/5) - drives the bump-escape reflex in
+    // tx_loop (back away, then turn away from the hit side). bump_bits: bit0 = left,
+    // bit1 = right, for the turn direction.
+    bumper: AtomicBool,
+    bump_bits: AtomicU8,
     lidar_on: AtomicBool,
     // observe mode: stop driving the MCU (no MotorCtrl, no nav frames, turret
     // off) so the robot stays "idle/docked" - the only state in which the
@@ -300,6 +305,8 @@ fn rx_loop(mut rd: File, w: Arc<Mutex<File>>, sh: Arc<Shared>, tx: Sender<Tap>) 
                     let cliff_rev = (t.raw[1] & 0x36) != 0; // bits 1,2,4,5: mid + rear
                     sh.hazard_fwd.store(bumper || wheel || cliff_fwd, Ordering::Relaxed);
                     sh.hazard_rev.store(wheel || cliff_rev, Ordering::Relaxed);
+                    sh.bumper.store(bumper, Ordering::Relaxed);
+                    sh.bump_bits.store((t.raw[0] >> 4) & 0x03, Ordering::Relaxed); // bit0=left, bit1=right
                     let _ = tx.send(Tap::Triggers {
                         dock: t.dock_sta(),
                         bumper_bits: (t.left_bumper() as u8) | ((t.right_bumper() as u8) << 1),
@@ -394,6 +401,18 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
     // a second fixed 04 here would fight it in nav). Harmless to RGB in observe
     // (verified: video2 keeps streaming). Escape hatch: W10_NO_MCU_INIT disables it.
     let mcu_init = std::env::var_os("W10_NO_MCU_INIT").is_none();
+    // Bump-escape reflex: on a front bumper hit, reverse a little then turn away from
+    // the hit side, overriding the planner for a moment (a vacuum recovers from an
+    // LDS-invisible obstacle by backing off and turning, not by pushing). Durations
+    // are env-tunable; W10_NO_BUMP_ESCAPE disables it. phase: 0 idle, 1 backing, 2 turning.
+    let bump_escape = std::env::var_os("W10_NO_BUMP_ESCAPE").is_none();
+    let back_ms: u64 = std::env::var("W10_BUMP_BACK_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(700);
+    let turn_ms: u64 = std::env::var("W10_BUMP_TURN_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(1100);
+    const BUMP_BACK_MM_S: f32 = 80.0;
+    const BUMP_TURN_RAD_S: f32 = 0.6;
+    let mut esc_phase: u8 = 0;
+    let mut esc_start: u64 = 0;
+    let mut esc_turn: f32 = -1.0;
     while !sh.shutdown.load(Ordering::Relaxed) {
         let observe = sh.observe.load(Ordering::Relaxed);
         if mcu_init && tick % 50 == 15 {
@@ -523,7 +542,7 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
         }
         let fresh =
             sh.now_ms().wrapping_sub(sh.last_cmd_ms.load(Ordering::Relaxed)) < WATCHDOG_MS;
-        let (mut lin, rot) = if sh.enabled.load(Ordering::Relaxed) && fresh {
+        let (mut lin, mut rot) = if sh.enabled.load(Ordering::Relaxed) && fresh {
             (
                 clampf(f32::from_bits(sh.linear_bits.load(Ordering::Relaxed)), -MAX_LINEAR_MM_S, MAX_LINEAR_MM_S),
                 clampf(f32::from_bits(sh.rot_bits.load(Ordering::Relaxed)), -MAX_ROT_RAD_S, MAX_ROT_RAD_S),
@@ -537,6 +556,33 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
             lin = 0.0;
         } else if lin < 0.0 && sh.hazard_rev.load(Ordering::Relaxed) {
             lin = 0.0;
+        }
+        // Bump-escape reflex (overrides the planner). Start on a fresh bumper hit.
+        if bump_escape && esc_phase == 0 && sh.bumper.load(Ordering::Relaxed) {
+            esc_phase = 1;
+            esc_start = sh.now_ms();
+            // turn away from the hit side: left-only -> turn right (CW, -); right-only
+            // -> turn left (CCW, +); head-on -> default right.
+            let b = sh.bump_bits.load(Ordering::Relaxed);
+            esc_turn = if b == 0x01 { -1.0 } else if b == 0x02 { 1.0 } else { -1.0 };
+        }
+        if esc_phase == 1 {
+            // back away, unless a rear cliff/lift blocks it -> skip to turning
+            if sh.now_ms().saturating_sub(esc_start) < back_ms && !sh.hazard_rev.load(Ordering::Relaxed) {
+                lin = -BUMP_BACK_MM_S;
+                rot = 0.0;
+            } else {
+                esc_phase = 2;
+                esc_start = sh.now_ms();
+            }
+        }
+        if esc_phase == 2 {
+            if sh.now_ms().saturating_sub(esc_start) < turn_ms {
+                lin = 0.0;
+                rot = esc_turn * BUMP_TURN_RAD_S;
+            } else {
+                esc_phase = 0; // reflex done -> planner resumes
+            }
         }
         if let Some(n) = encode_motor_ctrl(1, lin, rot, &mut mbuf) {
             if let Ok(mut f) = w.lock() {
@@ -606,6 +652,8 @@ pub fn run(mcu_path: &str, lds_path: &str, observe: bool, tx: Sender<Tap>) -> Ar
         shutdown: AtomicBool::new(false),
         hazard_fwd: AtomicBool::new(false),
         hazard_rev: AtomicBool::new(false),
+        bumper: AtomicBool::new(false),
+        bump_bits: AtomicU8::new(0),
         // turret spins for /scan in nav mode only. W10_NO_TURRET forces it off
         // even in nav (still drive-capable, but no LDS/scan): used to test whether
         // the spinning LDS turret is what disrupts the OV8856/isp0 MIPI timing and
