@@ -252,6 +252,21 @@ fn main() {
         let t = mk_pub(&mut node, "/", "cliff", "std_msgs", "Bool");
         node.create_publisher::<msg::Bool>(&t, None).expect("cliff pub")
     };
+    // Individual cliff/floor sensors (the 6-bit mask + one Bool per sensor). Bit
+    // order (raw[1] low 6 bits = global bits 8..13): front_left, mid_left, mid_right,
+    // front_right, rear_left, rear_right. front/rear corners verified; the two mid
+    // sensors' exact positions are TBD (named tentatively). true = sees no floor.
+    let cliff_flags_pub = {
+        let t = mk_pub(&mut node, "/cliff", "flags", "std_msgs", "UInt8");
+        node.create_publisher::<msg::UInt8>(&t, None).expect("cliff flags pub")
+    };
+    const CLIFF_NAMES: [&str; 6] =
+        ["front_left", "mid_left", "mid_right", "front_right", "rear_left", "rear_right"];
+    let mut cliff_sensor_pubs = Vec::with_capacity(6);
+    for name in CLIFF_NAMES {
+        let t = mk_pub(&mut node, "/cliff", name, "std_msgs", "Bool");
+        cliff_sensor_pubs.push(node.create_publisher::<msg::Bool>(&t, None).expect("cliff sensor pub"));
+    }
     // MCU fan/suction overcurrent fault (Triggers bit 42). The MCU has no analog
     // fan current - this flag is the only per-fan signal (fan draw itself shows on
     // /battery.current). true = the MCU tripped the fan's overcurrent protection.
@@ -482,10 +497,14 @@ fn main() {
             Tap::Battery(b) => {
                 let _ = battery_pub.publish(*b);
             }
-            Tap::Triggers { dock, bumper, cliff, fan_oc } => {
+            Tap::Triggers { dock, bumper, cliff_bits, fan_oc } => {
                 let _ = dock_pub.publish(msg::Bool { data: dock });
                 let _ = bumper_pub.publish(msg::Bool { data: bumper });
-                let _ = cliff_pub.publish(msg::Bool { data: cliff });
+                let _ = cliff_pub.publish(msg::Bool { data: cliff_bits != 0 }); // aggregate
+                let _ = cliff_flags_pub.publish(msg::UInt8 { data: cliff_bits });
+                for (i, p) in cliff_sensor_pubs.iter().enumerate() {
+                    let _ = p.publish(msg::Bool { data: cliff_bits & (1 << i) != 0 });
+                }
                 let _ = fan_oc_pub.publish(msg::Bool { data: fan_oc });
             }
             Tap::DockButton { home, start } => {

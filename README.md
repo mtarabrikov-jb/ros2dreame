@@ -28,6 +28,10 @@ Working, ava OFF, one binary (verified on the robot -> a Jazzy container):
 
 - `/imu` `sensor_msgs/Imu`, `/battery` `sensor_msgs/BatteryState`,
   `/dock` `/bumper` `/cliff` `std_msgs/Bool` (from Triggers)
+- **cliff sensors (split)** `/cliff/{front_left,mid_left,mid_right,front_right,rear_left,rear_right}`
+  `std_msgs/Bool` (one per downward sensor) + `/cliff/flags` `std_msgs/UInt8` (raw
+  6-bit mask); `/cliff` above is the aggregate (any). Needs the MCU 0x14 init group
+  to report (default on; `W10_NO_MCU_INIT=1` disables) - see [docs/MCU.md](docs/MCU.md).
 - **base-station buttons** `/dock_button_home` `/dock_button_start` `std_msgs/Bool`
   (true while held) - from the `0x23` dock-status frame byte0 (bit0 = Home, bit2 =
   Start/Stop; verified live). See [docs/MCU.md](docs/MCU.md).

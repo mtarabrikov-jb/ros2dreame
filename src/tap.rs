@@ -41,7 +41,11 @@ pub enum Tap {
     Image(Box<crate::msg::CompressedImage>),
     Imu(Box<Imu>),
     Battery(Box<BatteryState>),
-    Triggers { dock: bool, bumper: bool, cliff: bool, fan_oc: bool },
+    /// `cliff_bits` = the 6 downward cliff/floor sensors (raw[1] low 6 bits, global
+    /// bits 8-13). bit0 = front-left, bit3 = front-right, bit4 = rear-left,
+    /// bit5 = rear-right [verified]; bit1/bit2 are two more floor sensors [positions
+    /// TBD]. A bit is set when its sensor sees no floor (a fall edge or a lift).
+    Triggers { dock: bool, bumper: bool, cliff_bits: u8, fan_oc: bool },
     /// Base-station buttons, from the `0x23` dock-status frame byte0: bit0 = Home,
     /// bit2 = Start/Stop (verified live by pressing each on an r2104 dock).
     DockButton { home: bool, start: bool },
@@ -339,7 +343,7 @@ pub fn mcu_reader(addr: String, tx: Sender<Tap>) {
                         let _ = tx.send(Tap::Triggers {
                             dock: t.dock_sta(),
                             bumper: t.left_bumper() || t.right_bumper(),
-                            cliff: t.any_cliff(),
+                            cliff_bits: t.cliff_flags() & 0x3f,
                             fan_oc: t.fan_overcurrent(),
                         });
                     }

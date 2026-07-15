@@ -290,7 +290,7 @@ fn rx_loop(mut rd: File, w: Arc<Mutex<File>>, sh: Arc<Shared>, tx: Sender<Tap>) 
                     let _ = tx.send(Tap::Triggers {
                         dock: t.dock_sta(),
                         bumper: t.left_bumper() || t.right_bumper(),
-                        cliff: t.any_cliff(),
+                        cliff_bits: t.cliff_flags() & 0x3f,
                         fan_oc: t.fan_overcurrent(),
                     });
                 }
@@ -371,8 +371,22 @@ fn tx_loop(w: Arc<Mutex<File>>, sh: Arc<Shared>) {
     let cam_sync = std::env::var_os("W10_NO_CAM_SYNC").is_none();
     let cam_sync_val: u8 = std::env::var("W10_CAM_SYNC_VAL").ok()
         .and_then(|s| s.parse().ok()).unwrap_or(0);
+    // MCU 0x14 init register group. ava streams FOUR 0x14 `[reg][val]` frames every
+    // cycle: reg 0x01=01, 0x00=01, 0x09=02, 0x04=00 (0x04 = lidar). Without these the
+    // MCU does NOT scan the 6 downward cliff sensors - Triggers raw[1] stays 0 under
+    // de-ava'd ros2dreame even on a full lift; with the group raw[1] fires 0x00->0x3f
+    // exactly like ava (verified live). We send regs 0x00/0x01/0x09 here and leave
+    // reg 0x04 to the lidar logic below (it toggles 04 00/01 with the turret; sending
+    // a second fixed 04 here would fight it in nav). Harmless to RGB in observe
+    // (verified: video2 keeps streaming). Escape hatch: W10_NO_MCU_INIT disables it.
+    let mcu_init = std::env::var_os("W10_NO_MCU_INIT").is_none();
     while !sh.shutdown.load(Ordering::Relaxed) {
         let observe = sh.observe.load(Ordering::Relaxed);
+        if mcu_init && tick % 50 == 15 {
+            send(&w, 0x14, &[0x01, 0x01]);
+            send(&w, 0x14, &[0x00, 0x01]);
+            send(&w, 0x14, &[0x09, 0x02]);
+        }
         // SetLED / SetCleaning idle: harmless heartbeats ava always sends; keep
         // them in both modes so the MCU stays alive and streams telemetry.
         if tick % 25 == 5 {

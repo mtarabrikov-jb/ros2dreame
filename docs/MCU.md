@@ -31,6 +31,24 @@ sustains the protocol the way `ava` does. `src/direct.rs` replays that, ~50 Hz:
 Safety: on exit the driver sends a zero `MotorCtrl` so the motors stop; the
 hazard gate forces linear velocity to 0 whenever a cliff/bump is detected.
 
+## MCU init: the `0x14` register group (cliff enable)
+
+`0x14` is not a single "nav on" frame - it is a **register write**: `<0x14, reg,
+val>`. ava streams a group of four every cycle: `reg 0x01=01`, `0x00=01`,
+`0x09=02`, `0x04=00` (`0x04` = LDS turret: `01` on / `00` off). Without regs
+`0x00`/`0x01`/`0x09` the MCU **does not scan the 6 downward cliff sensors** -
+`Triggers` `raw[1]` stays `0x00` even on a full lift. Sending them makes `raw[1]`
+fire `0x00`->`0x3f` exactly like ava (verified live: lift -> `02 03 07 13 1a 1f
+3f`, the six bits filling in). `src/direct.rs` streams `0x00`/`0x01`/`0x09` in
+both modes (reg `0x04` is left to the turret logic, which toggles `04 00`/`04 01`
+- a second fixed `04` here would fight it in nav). Harmless to the RGB camera in
+observe (verified: `video2` keeps streaming, 0 misses). Escape hatch:
+`W10_NO_MCU_INIT=1` disables the group. Found by snooping ava's `ttyS4` boot
+writes (LD_PRELOAD read+write hook) and diffing the frame set against ros2dreame's
+- the cliff enable is **not** GPIO/PWM/sysfs (ava does no sysfs/gpio writes at
+boot; it only opens `/dev/i2c-2`/`i2c-3` for the ToF sensor), it is this MCU
+register group.
+
 ## Base station (dock) control: the `0x26` frame
 
 The dock's **mop-drying fan** and **mop-washing water pump** live in the base
@@ -143,7 +161,14 @@ the `0x26` wash/dry table.
 - `Status10ms` (0x02, 10 ms): gyro/accel + wheel-travel increments (IMU; `/imu`
   is planned).
 - `Triggers` (0x00): bumpers, wheel-float, cliff/floor sensors, dock, faults
-  (drives the hazard gate; `/bumper`/`/cliff`/`/dock` planned).
+  (drives the hazard gate). `raw[1]` = the **6 downward cliff sensors** (bits 0-5).
+  Published split: **`/cliff/<name>`** (`std_msgs/Bool`, one per sensor:
+  `front_left` bit0, `mid_left` bit1, `mid_right` bit2, `front_right` bit3,
+  `rear_left` bit4, `rear_right` bit5 - bits 0/3/4/5 confirmed from the global bit
+  map, bits 1/2 are best-guess mid positions), plus **`/cliff/flags`**
+  (`std_msgs/UInt8`, the raw 6-bit mask) and the aggregate **`/cliff`**
+  (`std_msgs/Bool`, any sensor). The cliff scan only reports once the MCU 0x14 init
+  group is sent (see above) - otherwise all stay 0.
 - `Battery` (0x2b): voltage / SoC / charging (`/battery` planned).
 - **Dock status** (`0x23`, 6 bytes, ~100 ms) -> the **base-station buttons**. byte0
   bit0 = **Home**, bit2 = **Start/Stop**, bit4 (`0x10`) = a constant docked flag;
