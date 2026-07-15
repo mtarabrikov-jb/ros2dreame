@@ -32,6 +32,12 @@ Working, ava OFF, one binary (verified on the robot -> a Jazzy container):
   `std_msgs/Bool` (one per downward sensor) + `/cliff/flags` `std_msgs/UInt8` (raw
   6-bit mask); `/cliff` above is the aggregate (any). Needs the MCU 0x14 init group
   to report (default on; `W10_NO_MCU_INIT=1` disables) - see [docs/MCU.md](docs/MCU.md).
+- **bumper (split)** `/bumper/{left,right}` `std_msgs/Bool` + `/bumper/flags`
+  `std_msgs/UInt8` (bit0 left, bit1 right); `/bumper` is the aggregate.
+- **wheel-drop / float** `/wheel_drop` `std_msgs/Bool` (aggregate) + `/wheel_drop/{left,right}`
+  `std_msgs/Bool` + `/wheel_drop/flags` `std_msgs/UInt8` (drive-wheel drop = an edge/lift).
+- These three hazard groups feed the host **fall/contact protection** (Nav2 costmap
+  obstacle layers via `host/nav2/hazard_costmap.py`) - see [host/README.md](host/README.md).
 - **base-station buttons** `/dock_button_home` `/dock_button_start` `std_msgs/Bool`
   (true while held) - from the `0x23` dock-status frame byte0 (bit0 = Home, bit2 =
   Start/Stop; verified live). See [docs/MCU.md](docs/MCU.md).

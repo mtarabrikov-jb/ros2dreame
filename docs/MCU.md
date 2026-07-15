@@ -168,7 +168,12 @@ the `0x26` wash/dry table.
   map, bits 1/2 are best-guess mid positions), plus **`/cliff/flags`**
   (`std_msgs/UInt8`, the raw 6-bit mask) and the aggregate **`/cliff`**
   (`std_msgs/Bool`, any sensor). The cliff scan only reports once the MCU 0x14 init
-  group is sent (see above) - otherwise all stay 0.
+  group is sent (see above) - otherwise all stay 0. `raw[0]` bits 4/5 = **bumpers**
+  (left/right) -> **`/bumper/{left,right}`** + `/bumper/flags` + aggregate `/bumper`;
+  bits 6/7 = **drive-wheel drop/float** -> **`/wheel_drop/{left,right}`** +
+  `/wheel_drop/flags` + aggregate `/wheel_drop`. All three groups feed the host
+  Nav2 fall/contact protection (`host/nav2/hazard_costmap.py` -> costmap obstacle
+  layers; cliff+wheel-drop persistent, bumper transient).
 - `Battery` (0x2b): voltage / SoC / charging (`/battery` planned).
 - **Dock status** (`0x23`, 6 bytes, ~100 ms) -> the **base-station buttons**. byte0
   bit0 = **Home**, bit2 = **Start/Stop**, bit4 (`0x10`) = a constant docked flag;

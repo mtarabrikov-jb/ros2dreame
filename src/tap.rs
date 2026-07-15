@@ -41,11 +41,15 @@ pub enum Tap {
     Image(Box<crate::msg::CompressedImage>),
     Imu(Box<Imu>),
     Battery(Box<BatteryState>),
-    /// `cliff_bits` = the 6 downward cliff/floor sensors (raw[1] low 6 bits, global
-    /// bits 8-13). bit0 = front-left, bit3 = front-right, bit4 = rear-left,
-    /// bit5 = rear-right [verified]; bit1/bit2 are two more floor sensors [positions
-    /// TBD]. A bit is set when its sensor sees no floor (a fall edge or a lift).
-    Triggers { dock: bool, bumper: bool, cliff_bits: u8, fan_oc: bool },
+    /// Hazard sensors from the `0x00` Triggers frame, each as a bitmask:
+    /// - `bumper_bits`: bit0 = left, bit1 = right (raw[0] bits 4/5) [verified].
+    /// - `cliff_bits`: the 6 downward cliff/floor sensors (raw[1] low 6 bits, global
+    ///   bits 8-13). bit0 = front-left, bit3 = front-right, bit4 = rear-left,
+    ///   bit5 = rear-right [verified]; bit1/bit2 are two more floor sensors [pos TBD].
+    ///   Set = that sensor sees no floor (a fall edge or a lift).
+    /// - `wheel_bits`: drive-wheel drop/float, bit0 = left, bit1 = right (raw[0]
+    ///   bits 6/7) [verified]. Set = that wheel dropped (edge or lifted).
+    Triggers { dock: bool, bumper_bits: u8, cliff_bits: u8, wheel_bits: u8, fan_oc: bool },
     /// Base-station buttons, from the `0x23` dock-status frame byte0: bit0 = Home,
     /// bit2 = Start/Stop (verified live by pressing each on an r2104 dock).
     DockButton { home: bool, start: bool },
@@ -342,8 +346,9 @@ pub fn mcu_reader(addr: String, tx: Sender<Tap>) {
                     Msg::Triggers(t) => {
                         let _ = tx.send(Tap::Triggers {
                             dock: t.dock_sta(),
-                            bumper: t.left_bumper() || t.right_bumper(),
+                            bumper_bits: (t.left_bumper() as u8) | ((t.right_bumper() as u8) << 1),
                             cliff_bits: t.cliff_flags() & 0x3f,
+                            wheel_bits: (t.left_wheel_floating() as u8) | ((t.right_wheel_floating() as u8) << 1),
                             fan_oc: t.fan_overcurrent(),
                         });
                     }

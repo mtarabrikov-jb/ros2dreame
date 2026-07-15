@@ -289,8 +289,9 @@ fn rx_loop(mut rd: File, w: Arc<Mutex<File>>, sh: Arc<Shared>, tx: Sender<Tap>) 
                     sh.hazard.store(hz, Ordering::Relaxed);
                     let _ = tx.send(Tap::Triggers {
                         dock: t.dock_sta(),
-                        bumper: t.left_bumper() || t.right_bumper(),
+                        bumper_bits: (t.left_bumper() as u8) | ((t.right_bumper() as u8) << 1),
                         cliff_bits: t.cliff_flags() & 0x3f,
+                        wheel_bits: (t.left_wheel_floating() as u8) | ((t.right_wheel_floating() as u8) << 1),
                         fan_oc: t.fan_overcurrent(),
                     });
                 }

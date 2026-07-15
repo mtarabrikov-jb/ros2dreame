@@ -248,6 +248,19 @@ fn main() {
         let t = mk_pub(&mut node, "/", "bumper", "std_msgs", "Bool");
         node.create_publisher::<msg::Bool>(&t, None).expect("bumper pub")
     };
+    // Left/right bumper split (raw[0] bits 4,5). /bumper above is the aggregate;
+    // these expose which side hit. bit0 = left, bit1 = right (feeds the host
+    // hazard_costmap.py -> Nav2 bump_layer for contact-obstacle avoidance).
+    let bumper_flags_pub = {
+        let t = mk_pub(&mut node, "/bumper", "flags", "std_msgs", "UInt8");
+        node.create_publisher::<msg::UInt8>(&t, None).expect("bumper flags pub")
+    };
+    const BUMPER_NAMES: [&str; 2] = ["left", "right"];
+    let mut bumper_sensor_pubs = Vec::with_capacity(2);
+    for name in BUMPER_NAMES {
+        let t = mk_pub(&mut node, "/bumper", name, "std_msgs", "Bool");
+        bumper_sensor_pubs.push(node.create_publisher::<msg::Bool>(&t, None).expect("bumper sensor pub"));
+    }
     let cliff_pub = {
         let t = mk_pub(&mut node, "/", "cliff", "std_msgs", "Bool");
         node.create_publisher::<msg::Bool>(&t, None).expect("cliff pub")
@@ -266,6 +279,23 @@ fn main() {
     for name in CLIFF_NAMES {
         let t = mk_pub(&mut node, "/cliff", name, "std_msgs", "Bool");
         cliff_sensor_pubs.push(node.create_publisher::<msg::Bool>(&t, None).expect("cliff sensor pub"));
+    }
+    // Wheel-drop / float sensors (raw[0] bits 6,7). /wheel_drop = aggregate,
+    // /wheel_drop/flags = 2-bit mask (bit0 = left, bit1 = right), /wheel_drop/{left,
+    // right}. A drop = that drive wheel went over an edge (or the robot was lifted) -
+    // an edge/fall signal alongside the cliff sensors (feeds the Nav2 drop layer).
+    let wheel_drop_pub = {
+        let t = mk_pub(&mut node, "/", "wheel_drop", "std_msgs", "Bool");
+        node.create_publisher::<msg::Bool>(&t, None).expect("wheel_drop pub")
+    };
+    let wheel_drop_flags_pub = {
+        let t = mk_pub(&mut node, "/wheel_drop", "flags", "std_msgs", "UInt8");
+        node.create_publisher::<msg::UInt8>(&t, None).expect("wheel_drop flags pub")
+    };
+    let mut wheel_drop_sensor_pubs = Vec::with_capacity(2);
+    for name in BUMPER_NAMES {
+        let t = mk_pub(&mut node, "/wheel_drop", name, "std_msgs", "Bool");
+        wheel_drop_sensor_pubs.push(node.create_publisher::<msg::Bool>(&t, None).expect("wheel_drop sensor pub"));
     }
     // MCU fan/suction overcurrent fault (Triggers bit 42). The MCU has no analog
     // fan current - this flag is the only per-fan signal (fan draw itself shows on
@@ -497,13 +527,22 @@ fn main() {
             Tap::Battery(b) => {
                 let _ = battery_pub.publish(*b);
             }
-            Tap::Triggers { dock, bumper, cliff_bits, fan_oc } => {
+            Tap::Triggers { dock, bumper_bits, cliff_bits, wheel_bits, fan_oc } => {
                 let _ = dock_pub.publish(msg::Bool { data: dock });
-                let _ = bumper_pub.publish(msg::Bool { data: bumper });
+                let _ = bumper_pub.publish(msg::Bool { data: bumper_bits != 0 }); // aggregate
+                let _ = bumper_flags_pub.publish(msg::UInt8 { data: bumper_bits });
+                for (i, p) in bumper_sensor_pubs.iter().enumerate() {
+                    let _ = p.publish(msg::Bool { data: bumper_bits & (1 << i) != 0 });
+                }
                 let _ = cliff_pub.publish(msg::Bool { data: cliff_bits != 0 }); // aggregate
                 let _ = cliff_flags_pub.publish(msg::UInt8 { data: cliff_bits });
                 for (i, p) in cliff_sensor_pubs.iter().enumerate() {
                     let _ = p.publish(msg::Bool { data: cliff_bits & (1 << i) != 0 });
+                }
+                let _ = wheel_drop_pub.publish(msg::Bool { data: wheel_bits != 0 }); // aggregate
+                let _ = wheel_drop_flags_pub.publish(msg::UInt8 { data: wheel_bits });
+                for (i, p) in wheel_drop_sensor_pubs.iter().enumerate() {
+                    let _ = p.publish(msg::Bool { data: wheel_bits & (1 << i) != 0 });
                 }
                 let _ = fan_oc_pub.publish(msg::Bool { data: fan_oc });
             }
