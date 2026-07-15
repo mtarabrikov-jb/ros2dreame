@@ -14,7 +14,7 @@ irrelevant because the binary is fully static musl.
 ## Status
 
 Working, ava OFF, one binary (verified on the robot -> a Jazzy container):
-- `/scan` `sensor_msgs/LaserScan` - LDS arc (W10 is a ~126 deg rear arc, not 360)
+- `/scan` `sensor_msgs/LaserScan` - full 360 deg LDS scan (8 m range)
 - `/odom` `nav_msgs/Odometry` + `/tf` (`odom -> base_link`) + `/tf_static`
   (`base_link -> laser`)
 - `/camera/image_raw/compressed` (RGB), `/camera_ir/image_raw/compressed` (IR)

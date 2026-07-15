@@ -181,8 +181,9 @@ the `0x26` wash/dry table.
   and **`/dock_button_start`** (`std_msgs/Bool`, true while held). Found live: at rest
   0x23 = `10 00 00 00 00 42`; Home press -> `11 ..`, Start/Stop -> `14 ..`. (A generic
   RX frame-change logger, `W10_RX_DEBUG=1` in `src/direct.rs`, located the frame.)
-- LDS packets (`/dev/ttyS3`) -> arc sweeps -> **`/scan`** (`sensor_msgs/LaserScan`,
-  a ~126 deg rear arc, not 360).
+- LDS packets (`/dev/ttyS3`) -> sweeps -> **`/scan`** (`sensor_msgs/LaserScan`,
+  a full **360 deg** scan, 8 m range - verified live: 359 beams over 358 deg,
+  valid returns evenly around the circle).
 
 The MCU streams `Status*` **only while it is being driven** (MotorCtrl + the nav
 heartbeats). A bare zero MotorCtrl alone is not enough - so in observe mode

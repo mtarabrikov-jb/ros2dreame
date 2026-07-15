@@ -15,7 +15,7 @@
     orientation_scale: 0.0
     gain_scale: 1.0                    # weight: prefer larger (higher-info) frontiers
     transform_tolerance: 1.5           # WiFi/tf jitter + robot<->host clock-sync residual
-    # The W10 LDS is a narrow ~123 deg rear arc, so frontiers are smaller/noisier
-    # than a 360 lidar - keep min_frontier_size modest so it still finds them.
+    # Full 360 deg LDS (surround coverage) - a modest min_frontier_size suits a
+    # home-scale map without being noisy.
     min_frontier_size: 0.5
     return_to_init: true               # drive back to the start pose when done
