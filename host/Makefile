@@ -7,8 +7,11 @@
 #   make slam | foxglove | rviz | rqt | steer | image | tf | teleop | save-map | logs | down
 DC   := docker compose
 SVC  := ros2dreame-gui
-SRC  := source /opt/ros/jazzy/setup.bash &&
-SRCX := source /opt/ros/jazzy/setup.bash && source /opt/explore_ws/install/setup.bash &&  # + explore_lite overlay
+# ROS + the explore_lite overlay are auto-sourced in every shell via BASH_ENV (set in
+# the Dockerfile), so no per-command `source setup.bash` is needed. SRC/SRCX are kept
+# (empty) so the recipes read the same. (Needs the image rebuilt: make build.)
+SRC  :=
+SRCX :=
 LOG  := >/proc/1/fd/1 2>&1             # detached procs -> container stdout (make logs)
 GUI  := $(DC) exec -d $(SVC) bash -c   # detached: GUI opens, make returns
 RUN  := $(DC) exec $(SVC) bash -c      # attached (stdin): terminal tools

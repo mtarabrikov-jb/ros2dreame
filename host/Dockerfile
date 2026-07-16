@@ -36,6 +36,12 @@ RUN . /opt/ros/jazzy/setup.sh \
     && colcon build --merge-install \
     && rm -rf build log src/m-explore-ros2/.git
 
-# Source ROS + the explore_lite overlay in every shell (docker exec bypasses the entrypoint).
-RUN echo 'source /opt/ros/jazzy/setup.bash' >> /root/.bashrc \
-    && echo 'source /opt/explore_ws/install/setup.bash' >> /root/.bashrc
+# Auto-source ROS + the explore_lite overlay in EVERY shell. `docker exec bash -c`
+# runs a NON-interactive shell, which does not read .bashrc - so `make`/exec would
+# otherwise have to prefix every command with `source .../setup.bash`. BASH_ENV is
+# the file bash sources for non-interactive shells, so pointing it at a setup script
+# makes `docker exec ... bash -c 'ros2 ...'` just work, no per-command source.
+RUN printf 'source /opt/ros/jazzy/setup.bash\nif [ -f /opt/explore_ws/install/setup.bash ]; then source /opt/explore_ws/install/setup.bash; fi\n' > /opt/ros_env.bash
+ENV BASH_ENV=/opt/ros_env.bash
+# .bashrc for interactive shells (make shell); BASH_ENV covers non-interactive exec.
+RUN echo 'source /opt/ros_env.bash' >> /root/.bashrc
