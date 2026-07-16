@@ -21,6 +21,9 @@ services:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - ROS_DISTRO=jazzy
       - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      # bash sources this for every non-interactive shell (docker exec bash -c), so
+      # ROS + the explore overlay are always on PATH without a per-command `source`.
+      - BASH_ENV=/cfg/ros_env.bash
       # Default transports (SHM + UDP): SHM carries the large local raw-image
       # topics (republish -> rqt) without fragmenting; the robot is remote so it
       # uses UDP anyway. Forcing UDP-only broke the local image path. To force
@@ -30,6 +33,7 @@ services:
       - LIBGL_ALWAYS_SOFTWARE=${LIBGL_ALWAYS_SOFTWARE:-1}
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./ros_env.bash:/cfg/ros_env.bash:ro
       - ./fastdds_no_shm.xml:/cfg/fastdds_no_shm.xml:ro
       - ../rviz:/cfg/rviz:ro
       - ./slam:/cfg/slam:ro
