@@ -564,8 +564,12 @@ fn main() {
                 // incoming subs like /cmd_vel. A dashboard doesn't need 50 Hz.
                 n_curr += 1;
                 if n_curr % 10 == 0 {
-                    let _ = currents_pub.publish(crate::tap::currents_array(c));
-                    for (p, &v) in current_pubs.iter().zip(c.iter()) {
+                    // Motor currents are draw magnitudes; the MCU reports them signed
+                    // and they dither a few units below 0 at rest (measurement noise).
+                    // Clamp to >= 0 so the plot never shows impossible negative current.
+                    let cc = c.map(|v| v.max(0));
+                    let _ = currents_pub.publish(crate::tap::currents_array(cc));
+                    for (p, &v) in current_pubs.iter().zip(cc.iter()) {
                         let _ = p.publish(msg::Int16 { data: v });
                     }
                 }
