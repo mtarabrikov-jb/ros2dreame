@@ -30,6 +30,20 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import UInt8
 from sensor_msgs.msg import PointCloud2, PointField
+from visualization_msgs.msg import Marker, MarkerArray
+
+# Top-down robot diagram (/hazard/markers, base_link): one dot/bar/cylinder per
+# sensor at its position on the body, coloured by state (green = clear, red =
+# triggered). shape per group + per-bit (x, y) [m] + short label. Show it in a
+# Foxglove/rviz 3D panel following base_link, top-down.
+VIZ = {
+    #             shape       [(x, y), ...] per bit                                        [labels]
+    "cliff":      ("sphere",  [(0.15, 0.08), (0.10, 0.14), (0.10, -0.14), (0.15, -0.08), (-0.15, 0.08), (-0.15, -0.08)],
+                              ["FL", "ML", "MR", "FR", "RL", "RR"]),
+    "bumper":     ("cube",    [(0.17, 0.09), (0.17, -0.09)], ["B L", "B R"]),
+    "wheel_drop": ("cylinder", [(0.0, 0.15), (0.0, -0.15)], ["W L", "W R"]),
+}
+_SHAPE = {"sphere": Marker.SPHERE, "cube": Marker.CUBE, "cylinder": Marker.CYLINDER}
 
 # name -> (flags_topic, cloud_topic, default [(x,y)] offsets per bit)
 HAZARDS = {
@@ -83,11 +97,49 @@ class HazardCostmap(Node):
                 qos_profile_sensor_data)
             self.sources.append((name, offsets, pub))
 
+        # Top-down robot diagram of all hazard sensors (for a Foxglove/rviz 3D panel).
+        self.marker_pub = self.create_publisher(MarkerArray, "/hazard/markers", 1)
+
         rate = float(self.get_parameter("publish_rate").value)
         self.create_timer(1.0 / rate if rate > 0 else 0.2, self._tick)
         self.get_logger().info(
-            f"hazard_costmap: {'/'.join(HAZARDS)} flags -> obstacle clouds "
-            f"(frame {self.frame_id}, z {self.point_z} m)")
+            f"hazard_costmap: {'/'.join(HAZARDS)} flags -> obstacle clouds + /hazard/markers "
+            f"(frame {self.frame_id})")
+
+    def _mk(self, mid, mtype, x, y, z, sx, sy, sz, rgba, text=None):
+        m = Marker()
+        m.header.frame_id = self.frame_id
+        m.header.stamp = self.get_clock().now().to_msg()
+        m.ns = "hazard"
+        m.id = mid
+        m.type = mtype
+        m.action = Marker.ADD
+        m.pose.position.x, m.pose.position.y, m.pose.position.z = float(x), float(y), float(z)
+        m.pose.orientation.w = 1.0
+        m.scale.x, m.scale.y, m.scale.z = float(sx), float(sy), float(sz)
+        m.color.r, m.color.g, m.color.b, m.color.a = rgba
+        if text is not None:
+            m.text = text
+        return m
+
+    def _markers(self):
+        arr = MarkerArray()
+        gray = (0.30, 0.32, 0.38, 0.45)
+        # robot body disc + a blue nose showing the front
+        arr.markers.append(self._mk(0, Marker.CYLINDER, 0.0, 0.0, -0.03, 0.35, 0.35, 0.02, gray))
+        arr.markers.append(self._mk(1, Marker.ARROW, 0.0, 0.0, 0.0, 0.16, 0.03, 0.03, (0.20, 0.55, 0.95, 0.9)))
+        mid = 10
+        for name, (shape, positions, labels) in VIZ.items():
+            mask = self.masks.get(name, 0)
+            for i, (x, y) in enumerate(positions):
+                on = bool(mask & (1 << i))
+                rgba = (0.90, 0.15, 0.15, 1.0) if on else (0.15, 0.70, 0.22, 1.0)
+                s = 0.06 if shape == "sphere" else 0.055
+                arr.markers.append(self._mk(mid, _SHAPE[shape], x, y, 0.0, s, s, 0.03, rgba))
+                arr.markers.append(self._mk(mid + 1, Marker.TEXT_VIEW_FACING, x, y, 0.06,
+                                            0.03, 0.03, 0.035, (0.95, 0.95, 0.95, 0.9), text=labels[i]))
+                mid += 2
+        return arr
 
     def _tick(self):
         for name, offsets, pub in self.sources:
@@ -101,6 +153,7 @@ class HazardCostmap(Node):
                     if mask & (1 << i)
                 ]
             pub.publish(self._cloud(points))
+        self.marker_pub.publish(self._markers())
 
     def _cloud(self, points):
         msg = PointCloud2()
