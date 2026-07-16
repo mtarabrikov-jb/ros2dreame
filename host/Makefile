@@ -67,7 +67,17 @@ explore:                  ## autonomous frontier exploration: slam + Nav2 (slam 
 	$(GUI) '$(SRC) ros2 launch slam_toolbox online_async_launch.py slam_params_file:=/cfg/slam/dreame_slam.yaml $(LOG)'
 	@echo ">> waiting for SLAM to publish the map before starting Nav2 (else the costmaps never activate)..."
 	$(RUN) '$(SRC) for i in $$(seq 1 40); do timeout 2 ros2 topic echo /tf --once 2>/dev/null | grep -q "frame_id: map" && { echo ">> SLAM map up after ~$${i}s"; exit 0; }; sleep 1; done; echo ">> WARN: SLAM map not up after ~40s; continuing (check make logs)"'
-	$(GUI) '$(SRC) ros2 launch /cfg/nav2/nav2_minimal.launch.py slam:=true $(LOG)'
+	@echo ">> starting Nav2 (with activation retry - the slam+Nav2 startup is timing-flaky over WiFi: the local costmap can miss its first transforms and controller_server fails to activate, leaving Nav2 inactive so it rejects every explore goal)..."
+	@for t in 1 2 3; do \
+	  $(DC) exec -d $(SVC) bash -c 'source /opt/ros/jazzy/setup.bash && ros2 launch /cfg/nav2/nav2_minimal.launch.py slam:=true >/proc/1/fd/1 2>&1'; \
+	  sleep 18; \
+	  if $(DC) exec -T $(SVC) bash -c 'source /opt/ros/jazzy/setup.bash && ros2 lifecycle get /controller_server 2>/dev/null | grep -q active'; then \
+	    echo ">> Nav2 active (attempt $$t)"; break; \
+	  fi; \
+	  echo ">> Nav2 not active (attempt $$t) - restarting it..."; \
+	  $(DC) exec -T $(SVC) bash -c 'pkill -9 -f "controller_server|planner_server|bt_navigator|behavior_server|smoother_server|lifecycle_manager" || true'; \
+	  sleep 3; \
+	done
 	$(GUI) '$(SRCX) ros2 run explore_lite explore --ros-args --params-file /cfg/explore/explore.yaml $(LOG)'
 	$(GUI) '$(SRC) rviz2 -d /opt/ros/jazzy/share/nav2_bringup/rviz/nav2_default_view.rviz $(LOG)'
 	@echo ">> exploration up: slam (fresh map) + Nav2 (slam mode + cliff/wheel/bump hazard layers) + explore_lite. The TURRET MUST SPIN for /scan (drive once, or Turret ON). Robot maps autonomously; return_to_init brings it home. A mature replacement for auto_mapper. Stop: make down. Logs: make logs"
